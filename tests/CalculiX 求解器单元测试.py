@@ -68,10 +68,20 @@ class TestInstallationCheck:
         """找不到二进制文件时返回 False。"""
         with (
             patch("cae.solvers.calculix.settings") as mock_settings,
-            patch("cae.solvers.calculix.shutil.which", return_value=None),
+            patch.object(solver, "_find_wsl_ccx", return_value=None),
         ):
             mock_settings.solvers_dir = tmp_path / "empty"
-            assert solver.check_installation() is False
+            # Patch Path.is_file and Path.exists to return False for all paths
+            def fake_is_file(self):
+                return False
+            def fake_exists(self):
+                return False
+            with (
+                patch.object(Path, "is_file", fake_is_file),
+                patch.object(Path, "exists", fake_exists),
+                patch("cae.solvers.calculix.shutil.which", return_value=None),
+            ):
+                assert solver.check_installation() is False
 
     def test_installed_when_bundled_binary_exists(
         self, solver: CalculixSolver, fake_binary: Path, tmp_path: Path

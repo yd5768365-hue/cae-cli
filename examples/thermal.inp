@@ -1,0 +1,32 @@
+*HEADING
+ Free thermal expansion test
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 1.0, 1.0, 0.0
+4, 0.0, 1.0, 0.0
+5, 0.0, 0.0, 1.0
+6, 1.0, 0.0, 1.0
+7, 1.0, 1.0, 1.0
+8, 0.0, 1.0, 1.0
+*ELEMENT, TYPE=C3D8
+1, 1,2,3,4,5,6,7,8
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000, 0.3
+*EXPANSION
+1e-5
+*SOLID SECTION
+1.
+*STEP
+*HEAT TRANSFER, steady state
+*BOUNDARY
+1, 11, 0.0
+2, 11, 10.0
+3, 11, 20.0
+4, 11, 30.0
+5, 11, 0.0
+6, 11, 10.0
+7, 11, 20.0
+8, 11, 30.0
+*END STEP

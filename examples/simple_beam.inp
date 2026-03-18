@@ -25,4 +25,4 @@ One element tension test
 1.,1.
 *CLOAD
 2,1,1.
-*END
+*ENDSTEP

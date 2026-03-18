@@ -121,14 +121,16 @@ class TestMeshGeometry:
         return g
 
     def test_missing_file_returns_error(self, tmp_path: Path):
-        r = mesh_geometry(tmp_path / "no.step", tmp_path)
+        with patch.dict("sys.modules", {"gmsh": MagicMock()}):
+            r = mesh_geometry(tmp_path / "no.step", tmp_path)
         assert r.success is False
         assert "不存在" in (r.error or "")
 
     def test_unsupported_format_returns_error(self, tmp_path: Path):
         f = tmp_path / "model.xyz"
         f.write_text("")
-        r = mesh_geometry(f, tmp_path)
+        with patch.dict("sys.modules", {"gmsh": MagicMock()}):
+            r = mesh_geometry(f, tmp_path)
         assert r.success is False
         assert "不支持" in (r.error or "")
 

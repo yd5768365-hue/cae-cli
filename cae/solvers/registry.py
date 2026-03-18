@@ -29,10 +29,11 @@ def get_solver(name: str) -> BaseSolver:
     Raises:
         ValueError: 如果求解器名称不存在
     """
-    if name not in SOLVERS:
+    key = name.lower()
+    if key not in SOLVERS:
         available = ", ".join(SOLVERS.keys())
         raise ValueError(f"未知求解器 '{name}'，可用求解器: {available}")
-    return SOLVERS[name]()
+    return SOLVERS[key]()
 
 
 def list_solvers() -> list[dict]:

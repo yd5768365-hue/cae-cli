@@ -60,13 +60,20 @@ class CalculixSolver(BaseSolver):
     # ------------------------------------------------------------------ #
 
     def _find_binary(self) -> Optional[Path]:
-        # 1. cae install 安装的捆绑二进制
+        # 1. cae install 安装的捆绑二进制（~/.cae-cli/solvers/calculix/bin/）
         for candidate in [
+            settings.solvers_dir / "calculix" / "bin" / "ccx",
+            settings.solvers_dir / "calculix" / "bin" / "ccx.exe",  # Windows
             settings.solvers_dir / "calculix" / "ccx",
-            settings.solvers_dir / "calculix" / "ccx.exe",  # Windows
+            settings.solvers_dir / "calculix" / "ccx.exe",  # 兼容旧版本
         ]:
             if candidate.is_file():
                 return candidate
+
+        # 1.5. 项目本地的 ccx.exe（独立运行版本，带 DLL）
+        local_ccx = Path("D:/CAE-CLI/cae-cli/cxx.exe/ccx.exe")
+        if local_ccx.is_file():
+            return local_ccx.resolve()
 
         # 2. 项目目录下的 ccx
         for candidate in _MSYS2_PATHS:
@@ -142,6 +149,27 @@ class CalculixSolver(BaseSolver):
     def _add_msys2_path(self) -> None:
         """添加 MSYS2 bin 目录到 PATH（ccx.exe 需要这些 DLL）"""
         import os
+
+        # 1. 检查 cae install 安装的目录 (~/.cae-cli/solvers/calculix/bin/)
+        install_bin_dir = settings.solvers_dir / "calculix" / "bin"
+        if install_bin_dir.exists():
+            current_path = os.environ.get("PATH", "")
+            if str(install_bin_dir) not in current_path:
+                os.environ["PATH"] = str(install_bin_dir) + os.pathsep + current_path
+            return
+
+        # 2. 检查项目自带的 ccx.exe 目录
+        local_ccx_dir = Path("D:/CAE-CLI/cae-cli/cxx.exe")
+        local_dll_dir = local_ccx_dir / "dlls"
+
+        if local_dll_dir.exists():
+            # 使用本地 DLL 目录
+            current_path = os.environ.get("PATH", "")
+            if str(local_dll_dir) not in current_path:
+                os.environ["PATH"] = str(local_dll_dir) + os.pathsep + current_path
+            return
+
+        # 3. 回退到系统 MSYS2
         msys2_bin = Path("D:/Apps/tools/msys/ucrt64/bin")
         if msys2_bin.exists():
             current_path = os.environ.get("PATH", "")
@@ -161,6 +189,55 @@ class CalculixSolver(BaseSolver):
         import os
         self._add_msys2_path()
         return os.environ.copy()
+
+    def _ensure_frd_output(self, inp_file: Path) -> None:
+        """
+        cae-cli 专属：强制在 *STEP ... *END STEP 内部插入输出块。
+
+        *NODE FILE 和 *EL FILE 是 step 关键字，必须放在 *STEP 内部
+        才能让 CalculiX 将位移/应力结果写入 .frd 文件。
+
+        官方关键规则（摘自 CalculiX 手册）：
+        - *NODE FILE：输出节点位移到 .frd
+        - *EL FILE：输出单元应力到 .frd
+        - 这两个关键字必须放在 *STEP ... *END STEP 内部！
+        """
+        text = inp_file.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        upper_lines = [l.upper().strip() for l in lines]
+
+        # 检查是否已有 *NODE FILE 和 *EL FILE（在 *STEP 内部）
+        has_node_file = False
+        has_el_file = False
+        in_step = False
+        for line in upper_lines:
+            if line.startswith("*STEP"):
+                in_step = True
+            elif line.startswith("*END") and "STEP" in line:
+                in_step = False
+            elif in_step:
+                if "*NODE FILE" in line:
+                    has_node_file = True
+                if "*EL FILE" in line:
+                    has_el_file = True
+
+        if has_node_file and has_el_file:
+            return  # 已有正确的输出请求
+
+        # 从后往前找最后一个 *END STEP，在它前面插入
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].upper().strip().startswith("*END") and "STEP" in lines[i].upper():
+                additions: list[str] = []
+                if not has_node_file:
+                    additions.extend(["*NODE FILE", "U"])
+                if not has_el_file:
+                    additions.extend(["*EL FILE", "S"])
+
+                for j, line in enumerate(additions):
+                    lines.insert(i + j, line)
+
+                inp_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                break
 
     def solve(
         self,
@@ -204,6 +281,9 @@ class CalculixSolver(BaseSolver):
         if inp_dest.resolve() != inp_file.resolve():
             shutil.copy2(inp_file, inp_dest)
 
+        # --- 检查并添加 FRD 输出请求（*NODE FILE / *EL FILE）---
+        self._ensure_frd_output(inp_dest)
+
         # --- 运行 CalculiX ---
         start = time.monotonic()
         is_wsl = self._is_wsl(binary)
@@ -226,16 +306,70 @@ class CalculixSolver(BaseSolver):
                     env=env,
                 )
             else:
-                # 直接运行
-                cmd = [str(binary), "-i", job_name]
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(output_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    env=env,
-                )
+                # 检查 ccx 安装位置
+                # 1. cae install 安装的目录 (~/.cae-cli/solvers/calculix/bin/)
+                install_bin_dir = (settings.solvers_dir / "calculix" / "bin").resolve()
+
+                # 2. 项目本地的 ccx.exe 目录
+                local_ccx_dir = Path("D:/CAE-CLI/cae-cli/cxx.exe").resolve()
+                local_dll_dir = local_ccx_dir / "dlls"
+
+                # 判断使用哪种运行模式
+                use_install_dir = install_bin_dir.exists() and binary.resolve().parent == install_bin_dir
+                use_local_dll = local_dll_dir.exists() and binary.resolve() == local_ccx_dir / "ccx.exe"
+
+                if use_install_dir:
+                    # 从安装目录运行 - DLL 就在 bin 目录中
+                    cmd = [str(binary), "-i", job_name]
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(output_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        env=env,
+                    )
+                elif use_local_dll:
+                    # 使用本地 DLL 目录作为工作目录
+                    # 需要把输入文件复制到 dlls 目录
+                    inp_in_dlls = local_dll_dir / inp_file.name
+                    if inp_dest.resolve() != inp_in_dlls.resolve():
+                        shutil.copy2(inp_dest, inp_in_dlls)
+
+                    # 确保 DLL 目录在 PATH 中（使用绝对路径）
+                    env_copy = env.copy()
+                    dll_dir_str = str(local_dll_dir)
+                    if dll_dir_str not in env_copy.get("PATH", ""):
+                        env_copy["PATH"] = dll_dir_str + os.pathsep + env_copy.get("PATH", "")
+
+                    # 使用绝对路径运行 ccx
+                    cmd = [str(local_ccx_dir / "ccx.exe"), "-i", job_name]
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(local_dll_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        env=env_copy,
+                    )
+                    # 将输出文件从 dll 目录复制到 output_dir
+                    for f in local_dll_dir.iterdir():
+                        if f.suffix in (".frd", ".dat", ".sta", ".cvg") and f.stem == job_name:
+                            shutil.copy2(f, output_dir / f.name)
+                    # 清理 dlls 目录中的输入文件
+                    if inp_in_dlls.exists():
+                        inp_in_dlls.unlink()
+                else:
+                    # 直接运行（系统 MSYS2 或其他）
+                    cmd = [str(binary), "-i", job_name]
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(output_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        env=env,
+                    )
         except subprocess.TimeoutExpired:
             return self._error_result(
                 output_dir,

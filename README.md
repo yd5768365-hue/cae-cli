@@ -75,16 +75,30 @@ cae solvers
 
 | 命令 | 说明 | 状态 |
 |------|------|------|
-| `cae solve [file.inp]` | 执行 FEA 仿真 | ✅ 第一周 |
-| `cae solvers` | 列出求解器状态 | ✅ 第一周 |
-| `cae info` | 显示配置路径 | ✅ 第一周 |
-| `cae view [results/]` | 浏览器查看结果 | 🚧 第二周 |
-| `cae mesh` | 交互式划网格 | 🚧 第三周 |
-| `cae run [model.step]` | 全流程一键运行 | 🚧 第三周 |
-| `cae install` | 安装 CalculiX + 模型 | 🚧 第四周 |
+| `cae solve [file.inp]` | 执行 FEA 仿真 | ✅ |
+| `cae solvers` | 列出求解器状态 | ✅ |
+| `cae info` | 显示配置路径 | ✅ |
+| `cae view [results/]` | 浏览器查看结果 | ✅ |
+| `cae mesh` | 交互式划网格 | ✅ |
+| `cae run [model.step]` | 全流程一键运行 | ✅ |
+| `cae install` | 安装 CalculiX + 模型 | ✅ |
 | `cae explain [results/]` | AI 解读结果 | 🚧 第五周 |
 | `cae diagnose [results/]` | AI 诊断问题 | 🚧 第五周 |
 | `cae suggest [results/]` | AI 优化建议 | 🚧 第五周 |
+
+---
+
+## 示例文件
+
+| 文件 | 说明 |
+|------|------|
+| `examples/simple_beam.inp` | 简单梁单元测试 |
+| `examples/simple_cantilever.inp` | 悬臂梁测试 |
+| `examples/thermal.inp` | 热分析示例 |
+| `examples/box.step` | 立方体几何（用于网格划分）|
+| `examples/bracket.step` | 角支架几何 |
+| `examples/plate_with_hole.step` | 带孔板几何 |
+| `examples/shaft.step` | 轴类零件几何 |
 
 ---
 
@@ -144,11 +158,33 @@ ruff check cae/
 | 周次 | 目标 | 状态 |
 |------|------|------|
 | 第一周 | 建仓库 + `cae solve` 调通 CalculiX | ✅ |
-| 第二周 | 结果转 VTK + ParaView Glance 跑通 | 🚧 |
-| 第三周 | `cae mesh` 调通 Gmsh + `cae run` 全流程 | 🚧 |
-| 第四周 | `cae install` 自动安装 + 打包发布 | 🚧 |
+| 第二周 | 结果转 VTK + ParaView Glance 跑通 | ✅ |
+| 第三周 | `cae mesh` 调通 Gmsh + `cae run` 全流程 | ✅ |
+| 第四周 | `cae install` 自动安装 + 打包发布 | ✅ |
 | 第五周 | AI explain/diagnose 接入 llama.cpp | 🚧 |
 | 第六周 | 测试 + 文档 + 第一个真实用例跑通 | 🚧 |
+
+---
+
+## 技术细节
+
+### CalculiX FRD 结果输出
+
+CalculiX 需要在 `*STEP ... *END STEP` 内部使用 `*NODE FILE` 和 `*EL FILE` 才能将位移/应力结果写入 `.frd` 文件：
+
+```inp
+*STEP
+*STATIC
+...
+*NODE FILE
+U
+*EL FILE
+S
+*END STEP
+```
+
+- `*NODE FILE` / `*EL FILE` — 输出到 `.frd`（用于可视化）
+- `*NODE PRINT` / `*EL PRINT` — 输出到 `.dat`（用于文本查看）
 
 ---
 
