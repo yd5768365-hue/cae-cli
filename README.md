@@ -220,6 +220,10 @@ cae solvers
 cae install
 cae install --model deepseek-r1-7b-qwen   # 仅安装 AI 模型
 
+# 从网盘/直链下载 AI 模型
+cae download "https://example.com/model.gguf" -o models/
+cae download "https://example.com/model.gguf" -n my_model.gguf
+
 # 显示配置信息
 cae info
 # 显示：
