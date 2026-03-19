@@ -314,3 +314,41 @@ Suggestions count: 1
   - 一条命令生成标准悬臂梁/平板 INP 文件
   - 支持参数覆盖，方便批量生成变体模型
   - 可扩展：可在 `templates/` 目录添加更多模板
+
+---
+
+## 2026年3月19日（续）
+
+### 新增：官方测试集批量测试功能
+
+- **问题描述**：用户需要有正式的测试代码来验证 CalculiX 官方测试集的兼容性
+
+- **解决方法**：
+
+  1. **新建 `cae/test/official.py`**：
+     - `PhaseResult` 数据类：封装单阶段测试结果（total/ok/failed/pass_rate）
+     - `OfficialTestResult` 数据类：封装完整三阶段测试结果
+     - `run_official_tests()` 函数：执行完整测试流程
+       - Phase 1: `inp info` 解析全部 638 个文件
+       - Phase 2: `solve` 求解采样文件（默认10个）
+       - Phase 3: `convert` 转换采样文件的 .frd 结果
+     - CLI 入口：`python -m cae.test.official`
+
+  2. **新建 `cae/test/__init__.py`**：
+     - 导出 `run_official_tests` 和 `OfficialTestResult`
+
+  3. **更新 `cae/main.py`**：
+     - 新增 `cae test` 命令
+     - 支持 `--sample`、`--test-dir`、`--quiet` 选项
+     - 使用 Rich Panel 显示测试结果摘要
+
+- **解决效果**：
+  - `cae test` — 运行完整测试流程
+  - `cae test --sample 20` — 测试20个样本
+  - `cae test --quiet` — 静默模式
+  - 测试结果格式化为 Table 输出
+
+- **测试报告**（ccx_2.23.test 638 个文件）：
+  - Phase 1: 638/638 OK
+  - Phase 2: 8/10 OK（声学分析文件除外）
+  - Phase 3: 8/8 OK
