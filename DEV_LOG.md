@@ -202,3 +202,37 @@ Suggestions count: 1
      - `cae inp suggest model.inp [-r results_dir] [--no-ai] [--stream/--no-stream]`
      - 结合仿真结果（results_dir）分析最大位移/应力
      - 流式输出修改建议列表
+
+---
+
+### 新增：`cae mesh check` — CGX 风格网格预览
+
+- **问题描述**：用户希望在求解前预览网格、边界条件和载荷，类似 CGX 的实时可视化效果。
+
+- **解决方法**：
+
+  1. **新建 `cae/viewer/mesh_check.py`**：
+
+     - `MeshSummary` 数据类：n_nodes/n_elements/n_nsets/n_elsets/element_types/nsets/boundaries/cloads/dloads
+
+     - `extract_mesh_summary()`：解析 .inp 提取节点/单元/NSET/ELSET（支持 GENERATE 范围关键字）/BOUNDARY/CLOAD/DLOAD
+
+     - `_parse_node_set()`：支持 GENERATE 关键字的范围展开（range(start, stop, step)）
+
+     - `render_mesh_check()`：PyVista 离屏渲染：
+       - 网格按单元类型着色
+       - 节点按 NSET 着色（不同颜色代表不同边界条件）
+       - CLOAD 载荷箭头可视化
+       - 支持最多 50 个箭头
+
+     - `generate_mesh_check_html()`：Glance 风格 HTML 报告，包含统计数据、截图、表格
+
+  2. **更新 `main.py`**：
+     - 将原有 `cae mesh` 命令组化为 `mesh_app`（Typer 子组）
+     - `cae mesh gen` — 原有网格划分（Gmsh）
+     - `cae mesh check model.inp` — 网格检查预览
+
+- **解决效果**：
+  - `cae mesh check model.inp` 输出 HTML 报告和截图
+  - 自动打开浏览器预览
+  - 类似 CGX 实时预览：节点着色 = 边界条件，箭头 = 载荷

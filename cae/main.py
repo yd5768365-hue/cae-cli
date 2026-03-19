@@ -33,6 +33,71 @@ from cae.config import settings
 from cae.solvers.registry import get_solver, list_solvers
 
 # ------------------------------------------------------------------ #
+# mesh 命令组
+# ------------------------------------------------------------------ #
+
+mesh_app = typer.Typer(help="[bold]Mesh 网格工具[/bold] — 网格划分与检查")
+
+
+@mesh_app.command(name="check")
+def mesh_check(
+    inp_file: Path = typer.Argument(..., help=".inp 文件路径（用于网格预览）"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="输出 HTML 路径"),
+    browser: bool = typer.Option(True, "--browser/--no-browser", help="完成后打开浏览器"),
+) -> None:
+    """
+    [bold]网格检查[/bold] — 在求解前预览网格、边界条件和载荷
+
+    解析 .inp 文件，渲染网格可视化，快速检查模型设置是否正确。
+    类似 CGX 的实时预览效果。
+
+    \b
+    示例：
+      cae mesh check model.inp
+      cae mesh check model.inp -o mesh_report.html
+    """
+    from cae.viewer.mesh_check import render_mesh_check, generate_mesh_check_html
+
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]cae mesh check[/bold cyan] — 网格预览",
+        border_style="cyan",
+    ))
+    console.print()
+
+    out_path = output or Path("mesh_check_report.html")
+    screenshot_path = out_path.with_suffix(".png")
+
+    result = render_mesh_check(inp_file, screenshot_path)
+
+    if not result.success:
+        err_console.print(f"\n  {result.error}\n")
+        raise typer.Exit(1)
+
+    summary = result.summary
+    console.print(f"  [green]✓[/green] 解析成功")
+    console.print(f"  节点: {summary.n_nodes:,}  单元: {summary.n_elements:,}")
+    console.print(f"  节点集: {summary.n_nsets}  单元集: {summary.n_elsets}")
+    console.print(f"  边界条件: {len(summary.boundaries)}  CLOAD: {len(summary.cloads)}")
+    console.print()
+
+    if result.warnings:
+        for w in result.warnings:
+            console.print(f"  [yellow]⚠[/yellow] {w}")
+        console.print()
+
+    # 生成 HTML
+    generate_mesh_check_html(summary, screenshot_path, out_path, inp_file.name)
+    console.print(f"  报告已生成: [green]{out_path}[/green]")
+
+    # 自动打开浏览器
+    if browser:
+        import webbrowser
+        webbrowser.open(f"file://{out_path.resolve()}")
+        console.print(f"  已在浏览器中打开\n")
+
+
+# ------------------------------------------------------------------ #
 # inp 命令组
 # ------------------------------------------------------------------ #
 
@@ -300,6 +365,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(inp_app, name="inp")
+app.add_typer(mesh_app, name="mesh")
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
@@ -772,8 +838,8 @@ def run(
                 console.print(f"  无法启动查看器: {exc}\n")
 
 
-@app.command()
-def mesh(
+@mesh_app.command(name="gen")
+def mesh_gen(
     geo_file: Optional[Path] = typer.Argument(
         None,
         help="几何文件路径（.step / .brep / .iges / .geo）",
@@ -805,9 +871,9 @@ def mesh(
 
     \b
     示例：
-      cae mesh bracket.step
-      cae mesh bracket.step --quality fine --format inp
-      cae mesh                （纯交互模式）
+      cae mesh gen bracket.step
+      cae mesh gen bracket.step --quality fine --format inp
+      cae mesh gen             （纯交互模式）
     """
     from cae.mesh.gmsh_runner import (
         MeshQuality, mesh_geometry, check_gmsh, get_gmsh_version,
@@ -816,7 +882,7 @@ def mesh(
 
     console.print()
     console.print(Panel.fit(
-        "[bold cyan]cae mesh[/bold cyan] — 网格划分（Gmsh）",
+        "[bold cyan]cae mesh gen[/bold cyan] — 网格划分（Gmsh）",
         border_style="cyan",
     ))
     console.print()
