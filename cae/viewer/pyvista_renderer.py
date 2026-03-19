@@ -21,6 +21,8 @@ os.environ.setdefault("PYVISTA_OFF_SCREEN", "true")
 import numpy as np
 import pyvista as pv
 
+from cae.viewer._utils import von_mises
+
 log = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------ #
@@ -198,7 +200,7 @@ def render_von_mises(
         if stress_key and mesh.point_data[stress_key].ndim == 2:
             s = mesh.point_data[stress_key]
             if s.shape[1] >= 6:
-                vm = _von_mises_from_tensor(s)
+                vm = von_mises(s)
                 mesh.point_data["_von_mises"] = vm
                 vm_key = "_von_mises"
 
@@ -425,13 +427,3 @@ def _find_field(mesh, candidates: list[str], strict: bool = False) -> Optional[s
     if strict:
         return None
     return keys[0] if keys else None
-
-
-def _von_mises_from_tensor(stress: np.ndarray) -> np.ndarray:
-    """从 6 分量 Voigt 应力张量计算 Von Mises 等效应力。"""
-    s11, s22, s33 = stress[:, 0], stress[:, 1], stress[:, 2]
-    s12, s13, s23 = stress[:, 3], stress[:, 4], stress[:, 5]
-    return np.sqrt(0.5 * (
-        (s11 - s22) ** 2 + (s22 - s33) ** 2 + (s33 - s11) ** 2 +
-        6.0 * (s12 ** 2 + s13 ** 2 + s23 ** 2)
-    ))

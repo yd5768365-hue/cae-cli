@@ -82,3 +82,47 @@ Success: True
 Suggestions count: 1
 [2] 优化网格划分: 网格质量警告...
 ```
+
+---
+
+## 2026年3月19日（下午）
+
+### 项目全面优化
+
+- **问题描述**：项目存在重复代码、缺少缓存策略、懒加载不完善等问题。
+
+- **解决方法**：
+
+  1. **新建 `cae/viewer/_utils.py` 共享工具模块**：
+     - 提取 `von_mises()` 函数，消除 pyvista_renderer.py 和 vtk_export.py 的重复实现
+     - 提取 `parse_numbers()` 数字解析工具
+     - 提取 `find_frd()` 查找 .frd 文件的工具函数
+
+  2. **更新 `cae/viewer/vtk_export.py`**：
+     - 移除本地 `_von_mises()` 定义
+     - 改用 `from cae.viewer._utils import von_mises`
+
+  3. **更新 `cae/viewer/pyvista_renderer.py`**：
+     - 移除本地 `_von_mises_from_tensor()` 定义（与 `_utils.von_mises` 重复）
+     - 改用 `from cae.viewer._utils import von_mises`
+     - 保留原有 `_find_field()` 工具函数（仅限本模块使用）
+
+  4. **优化 `cae/solvers/calculix.py`**：
+     - 添加 `@functools.lru_cache(maxsize=1)` 缓存 `_find_binary()` 结果
+     - 避免每次 solve 时重复搜索 ccx 二进制文件
+     - 添加 `import functools`
+
+  5. **检查 `main.py` 懒加载**：
+     - 确认 `gmsh`、`pyvista`、`llama` 相关导入均使用函数内 `from ... import` 模式
+     - 无需额外修改
+
+  6. **检查模块 `__all__` 导出**：
+     - `cae/solvers/__init__.py` — 已有完整 `__all__` 和直接导入
+     - `cae/ai/__init__.py` — 已有完整 `__all__` 和懒加载 `__getattr__`
+     - `cae/viewer/__init__.py` — 已有完整 `__all__` 和懒加载 `__getattr__`
+
+- **解决效果**：
+  - 代码重复消除：`von_mises` 函数在两处重复定义 → 统一到 `_utils.py`
+  - 缓存优化：`CalculixSolver._find_binary()` 结果被缓存，避免重复文件系统搜索
+  - 模块结构清晰：重工具函数归入 `_utils.py`，公共 API 显式导出
+  - 懒加载完善：所有 heavy dependencies 均通过 `__getattr__` 按需加载

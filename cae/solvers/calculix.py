@@ -11,6 +11,7 @@ CalculiX 求解器实现
 """
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -59,6 +60,7 @@ class CalculixSolver(BaseSolver):
     # 二进制查找
     # ------------------------------------------------------------------ #
 
+    @functools.lru_cache(maxsize=1)
     def _find_binary(self) -> Optional[Path]:
         # 1. cae install 安装的捆绑二进制（~/.cae-cli/solvers/calculix/bin/）
         for candidate in [

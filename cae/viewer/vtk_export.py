@@ -198,7 +198,7 @@ def _fallback_frd_parser(frd_file: Path, vtu_path: Path) -> VtkExportResult:
 
         # 如果是应力分量，计算 Von Mises 应力
         if result_type == "Stress" and n_comps >= 6:
-            vm = _von_mises(arr)
+            vm = von_mises(arr)
             vm_key = f"VonMises_step{res.step}"
             point_data[vm_key] = vm
             exported_fields.append(vm_key)
@@ -219,16 +219,5 @@ def _fallback_frd_parser(frd_file: Path, vtu_path: Path) -> VtkExportResult:
     )
 
 
-def _von_mises(stress: np.ndarray) -> np.ndarray:
-    """
-    从 6 分量 Cauchy 应力张量计算 Von Mises 等效应力。
-    应力顺序：S11, S22, S33, S12, S13, S23
-    """
-    s11, s22, s33 = stress[:, 0], stress[:, 1], stress[:, 2]
-    s12, s13, s23 = stress[:, 3], stress[:, 4], stress[:, 5]
-    return np.sqrt(0.5 * (
-        (s11 - s22) ** 2 +
-        (s22 - s33) ** 2 +
-        (s33 - s11) ** 2 +
-        6.0 * (s12 ** 2 + s13 ** 2 + s23 ** 2)
-    ))
+# 导出共享函数供外部使用
+from cae.viewer._utils import von_mises  # noqa: E402, F401
