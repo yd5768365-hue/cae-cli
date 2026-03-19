@@ -170,4 +170,35 @@ Suggestions count: 1
      - `cae inp check model.inp` — 对照 kw_list.json 校验必填参数
      - `cae inp show model.inp -k *MATERIAL -n STEEL` — 显示指定块内容
      - `cae inp modify model.inp -k *MATERIAL -n STEEL --set E=210000` — 修改参数
-     - `cae inp modify model.inp -k *STEP -n STEP-1 --delete` — 删除块
+     - `cae inp modify model.inp -k *STEP --delete` — 删除块
+
+### Phase 3 完成 — 智能化
+
+- **问题描述**：需要 AI 辅助修改建议 + 完整的格式保留。
+
+- **解决方法**：
+
+  1. **格式保留生成**：
+     - `Block` 新增 `line_range` 字段，追踪原始文件行位置
+     - `InpModifier.generate_preserving()` 保留原始注释、空行、块之间结构
+     - `_clean_empty_lines()` 清理多余连续空行（最多保留2个）
+
+  2. **kw_list 参数校验**：
+     - `validate_block()` 校验单个 Block 的必填参数
+     - `validate_inp()` 校验整个文件
+     - `ValidationIssue` 数据类记录 severity/keyword/parameter/message
+
+  3. **AI 辅助修改建议**：
+     - `suggest_inp_modifications()` 生成修改建议（规则 + AI 混合）
+     - `_rule_based_suggestions()` 自动检测常见问题：
+       - 材料缺少密度定义
+       - STEP 缺少分析 procedure
+       - 边界条件未指定节点集
+     - `_ai_suggestions()` 调用 LLM 基于 INP 内容生成具体修改建议
+     - `_build_inp_summary()` 提取关键词统计、材料、载荷、STEP 信息供 AI 分析
+     - `ModificationSuggestion` 数据类：category/severity/keyword/name/action/params/reason
+
+  4. **新增 `cae inp suggest` 命令**：
+     - `cae inp suggest model.inp [-r results_dir] [--no-ai] [--stream/--no-stream]`
+     - 结合仿真结果（results_dir）分析最大位移/应力
+     - 流式输出修改建议列表
