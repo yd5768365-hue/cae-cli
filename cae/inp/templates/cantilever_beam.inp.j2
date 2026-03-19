@@ -1,0 +1,55 @@
+*HEADING
+{{ title }}
+** ----------------------------------------------------------------
+*MATERIAL, NAME={{ material_name | default('STEEL') }}
+*ELASTIC
+  {{ E | default(210000) }}, 0.3
+*DENSITY
+  {{ density | default(7.85e-9) }},
+*END MATERIAL
+** ----------------------------------------------------------------
+*NODE, NSET=NALL
+{% for i in range(n_nodes | default(11)) -%}
+{{ i+1 }}, {{ i * (L | default(100)) / ((n_nodes | default(11)) - 1) }}, 0.0, 0.0
+{% endfor %}
+** ----------------------------------------------------------------
+*ELEMENT, TYPE=B32, ELSET=EBEAM
+{% set n_elem = (n_elements | default(n_nodes | default(11) - 1)) -%}
+{% for i in range(n_elem) -%}
+{{ i+1 }}, {{ i+1 }}, {{ i+2 }}
+{% endfor %}
+*BEAM SECTION, MATERIAL={{ material_name | default('STEEL') }}, SECTION=RECT
+  {{ width | default(10) }}, {{ height | default(20) }}
+  0., 0., -1.
+** ----------------------------------------------------------------
+*BOUNDARY
+  NALL, 1, 3, 0.0
+** ----------------------------------------------------------------
+{% if load_type | default('force') == 'force' -%}
+*CLOAD
+{% for i in range(1, (n_nodes | default(11)) + 1) -%}
+  {{ i }}, 2, {{ load_value | default(1000) }}
+{% endfor %}
+{% else -%}
+*CLOAD
+  {{ n_nodes | default(11) }}, 6, {{ load_value | default(1000) }}
+{% endif %}
+** ----------------------------------------------------------------
+*STEP
+*STATIC
+*BOUNDARY
+  NALL, 1, 3, 0.0
+{% if load_type | default('force') == 'force' -%}
+*CLOAD
+{% for i in range(1, (n_nodes | default(11)) + 1) -%}
+  {{ i }}, 2, {{ load_value | default(1000) }}
+{% endfor %}
+{% else -%}
+*CLOAD
+  {{ n_nodes | default(11) }}, 6, {{ load_value | default(1000) }}
+{% endif %}
+*EL FILE
+  S, E
+*NODE FILE
+  U
+*END STEP

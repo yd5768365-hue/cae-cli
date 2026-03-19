@@ -441,6 +441,84 @@ def _get_inp_categories():
 
 
 # ------------------------------------------------------------------ #
+# cae inp template — 生成 INP 模板
+# ------------------------------------------------------------------ #
+
+@inp_app.command()
+def template(
+    name: Optional[str] = typer.Argument(None, help="模板名称"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="输出文件路径"),
+    list_templates: bool = typer.Option(False, "--list", help="列出所有可用模板"),
+    show_params: bool = typer.Option(False, "--params", help="显示模板参数"),
+    title: Optional[str] = typer.Option(None, "--title", help="模型标题"),
+    E: Optional[float] = typer.Option(None, "--E", help="弹性模量 (MPa)"),
+    L: Optional[float] = typer.Option(None, "--L", help="长度 (mm)"),
+    load_value: Optional[float] = typer.Option(None, "--load", help="载荷值"),
+    n_nodes: Optional[int] = typer.Option(None, "--nodes", help="节点数"),
+    n_elements: Optional[int] = typer.Option(None, "--elements", help="单元数"),
+) -> None:
+    """[bold]生成 INP 模板[/bold] — 使用参数化模板生成 .inp 文件"""
+    from cae.inp.template import list_templates as lt, get_template, render_to_file
+
+    # 列出模板
+    if list_templates:
+        templates = lt()
+        console.print()
+        console.print(Panel.fit("[bold cyan]可用模板[/bold cyan]", border_style="cyan"))
+        for t in templates:
+            console.print(f"\n  [bold]{t.name}[/bold] — {t.description}")
+            console.print(f"    文件: {t.file.name}")
+        console.print()
+        return
+
+    # 如果没有指定 name，显示帮助
+    if name is None:
+        console.print("  [yellow]请指定模板名称[/yellow]")
+        console.print("  使用 --list 查看所有模板")
+        return
+
+    # 获取模板
+    tmpl = get_template(name)
+    if tmpl is None:
+        console.print(f"  [red]未知模板: {name}[/red]")
+        console.print(f"  可用模板: {', '.join(t.name for t in lt())}")
+        return
+
+    # 显示参数
+    if show_params:
+        console.print()
+        console.print(Panel.fit(f"[bold cyan]{tmpl.name}[/bold cyan] — {tmpl.description}", border_style="cyan"))
+        console.print("\n  参数:")
+        for pname, ptype, pdesc in tmpl.params:
+            console.print(f"    [yellow]{pname}[/yellow] ({ptype}): {pdesc}")
+        console.print()
+        return
+
+    # 收集参数
+    params = {}
+    if title is not None:
+        params["title"] = title
+    if E is not None:
+        params["E"] = E
+    if L is not None:
+        params["L"] = L
+    if load_value is not None:
+        params["load_value"] = load_value
+    if n_nodes is not None:
+        params["n_nodes"] = n_nodes
+    if n_elements is not None:
+        params["n_elements"] = n_elements
+
+    # 渲染模板
+    try:
+        out_path = render_to_file(name, output or Path(f"{name}.inp"), **params)
+        console.print(f"  [green]生成成功: {out_path}[/green]")
+        console.print(f"  使用 --params 查看所有参数")
+    except Exception as e:
+        console.print(f"  [red]渲染失败: {e}[/red]")
+
+
+# ------------------------------------------------------------------ #
 # App 初始化
 # ------------------------------------------------------------------ #
 

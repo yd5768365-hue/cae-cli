@@ -1,0 +1,62 @@
+*HEADING
+{{ title | default('Flat Plate') }}
+** ----------------------------------------------------------------
+*MATERIAL, NAME={{ material_name | default('STEEL') }}
+*ELASTIC
+  {{ E | default(210000) }}, 0.3
+*DENSITY
+  {{ density | default(7.85e-9) }},
+*END MATERIAL
+** ----------------------------------------------------------------
+*NODE, NSET=NALL
+{% set nx = (n_x | default(10)) -%}
+{% set ny = (n_y | default(5)) -%}
+{% for j in range(ny) -%}
+{% for i in range(nx) -%}
+{{ j * nx + i + 1 }}, {{ i * (Lx | default(100)) / (nx - 1) }}, {{ j * (Ly | default(50)) / (ny - 1) }}, 0.0
+{% endfor %}
+{% endfor %}
+** ----------------------------------------------------------------
+*ELEMENT, TYPE=S4, ELSET=ESHELL
+{% for j in range(ny - 1) -%}
+{% for i in range(nx - 1) -%}
+{{ j * (nx - 1) + i + 1 }}, {{ j * nx + i + 1 }}, {{ j * nx + i + 2 }}, {{ j * nx + i + nx + 2 }}, {{ j * nx + i + nx + 1 }}
+{% endfor %}
+{% endfor %}
+*SHELL SECTION, MATERIAL={{ material_name | default('STEEL') }}, SECTION=5
+  {{ thickness | default(1.0) }}
+** ----------------------------------------------------------------
+*BOUNDARY
+  1, 1, 6, 0.0
+  {{ nx }}, 1, 6, 0.0
+  {{ (ny - 1) * nx + 1 }}, 1, 6, 0.0
+  {{ ny * nx }}, 1, 6, 0.0
+** ----------------------------------------------------------------
+{% if load_type | default('pressure') == 'pressure' -%}
+*DSLOAD
+  ESHELL, P, {{ pressure | default(1.0) }}
+{% else -%}
+*CLOAD
+{% set total = nx * ny -%}
+{% for i in range(1, total + 1) -%}
+  {{ i }}, 3, {{ (load_value | default(1000)) / total }}
+{% endfor %}
+{% endif %}
+** ----------------------------------------------------------------
+*STEP
+*STATIC
+{% if load_type | default('pressure') == 'pressure' -%}
+*DSLOAD
+  ESHELL, P, {{ pressure | default(1.0) }}
+{% else -%}
+*CLOAD
+{% set total = nx * ny -%}
+{% for i in range(1, total + 1) -%}
+  {{ i }}, 3, {{ (load_value | default(1000)) / total }}
+{% endfor %}
+{% endif %}
+*EL FILE
+  S, E
+*NODE FILE
+  U
+*END STEP
