@@ -40,5 +40,12 @@ cxx.exe/
 test_ccx/
 test_ccx2/
 
+# AI models (downloaded separately)
+models/
+*.bin
+
+# cae-cli data (user-specific)
+.cae-cli/
+
 # Build outputs
 release/
