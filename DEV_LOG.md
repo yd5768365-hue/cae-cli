@@ -242,3 +242,33 @@ Suggestions count: 1
   - `simple_cantilever.inp` → 12节点/2单元，BC:nset=NALL/DOF=1-3，CLOAD:4个节点各1000N
   - boundary 解析：支持 NSET 名称数据行 `NALL, 1, 3, 0.0`
   - PyVista UnstructuredGrid：改用 numpy flat_cells 数组构建
+
+---
+
+## 2026年3月19日（傍晚-续）
+
+### 新增：kw_tree.json 和关键词分类导航
+
+- **问题描述**：用户需要按分类浏览 .inp 关键词，快速查看某个关键词的详细参数定义。
+
+- **解决方法**：
+
+  1. **新建 `cae/inp/kw_tree.json`**：
+     - 从 cae-master `config/kw_tree.xml` 转换而来
+     - 7 大分类：Attributes、Mesh、Properties（含 Section 子类）、Loads & BC、Interactions、Constraints、Step（含 Analysis type/Field Output/Load & BC/Change 子类）
+
+  2. **更新 `cae/inp/__init__.py`**：
+     - `load_kw_tree()` — 懒加载 kw_tree.json
+     - `list_keywords(category)` — 返回指定分类下所有关键词列表
+     - `get_keyword_info(keyword)` — 返回关键词详情（参数列表、分类路径、是否已知）
+     - `_find_keyword_path()` / `_collect_keywords()` / `_flatten_collection()` — 内部辅助函数
+
+  3. **新增 `cae inp list` CLI 命令**：
+     - `cae inp list` — 显示所有分类及关键词数量（每类显示前5个示例）
+     - `cae inp list Mesh` — 显示 Mesh 分类下的所有关键词
+     - `cae inp list *NODE` — 显示 `*NODE` 关键词的详细参数信息
+
+- **解决效果**：
+  - `cae inp list` 可快速浏览 135 个关键词的分类分布
+  - `cae inp list *BOUNDARY` 显示参数：`OP`（Combo|MOD|NEW）、NSET（Line）、DOF（Int/Float）等
+  - kw_tree.json 可随时从 cae-master kw_tree.xml 同步更新
