@@ -11,6 +11,7 @@ CLI 框架：Typer + Rich
   cae convert [FRD_FILE]  — 手动转换 .frd → .vtu           （第二周）
   cae mesh [GEO_FILE]     — 交互式网格划分（Gmsh）          （第三周）
   cae run [MODEL_FILE]    — 全流程一键运行                  （第三周）
+  cae inp                  — INP 文件解析、检查、修改         （第四周）
 
 后续周次将补充：
   cae install / cae explain / cae diagnose / cae suggest
@@ -32,6 +33,194 @@ from cae.config import settings
 from cae.solvers.registry import get_solver, list_solvers
 
 # ------------------------------------------------------------------ #
+# inp 命令组
+# ------------------------------------------------------------------ #
+
+inp_app = typer.Typer(help="[bold]INP 文件解析与修改[/bold] — 解析、检查、修改 Abaqus/CalculiX .inp 文件")
+
+
+@inp_app.command()
+def info(
+    inp_file: Path = typer.Argument(..., help=".inp 文件路径"),
+) -> None:
+    """[bold]显示 .inp 文件结构摘要[/bold]"""
+    from cae.inp import InpParser
+
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae inp info[/bold cyan] — INP 文件结构", border_style="cyan"))
+    console.print()
+
+    try:
+        parser = InpParser()
+        blocks = parser.parse(inp_file)
+    except Exception as exc:
+        err_console.print(f"\n  解析失败: {exc}\n")
+        raise typer.Exit(1)
+
+    # 按关键词分组统计
+    kw_count: dict[str, int] = {}
+    kw_names: dict[str, list[str]] = {}
+    for b in blocks:
+        name = b.keyword_name
+        kw_count[name] = kw_count.get(name, 0) + 1
+        n = b.get_param("NAME")
+        if n:
+            kw_names.setdefault(name, []).append(n)
+
+    table = Table(title="关键词统计", box=box.ROUNDED)
+    table.add_column("关键词", style="cyan")
+    table.add_column("数量", justify="right", style="yellow")
+    table.add_column("名称（NAME）", style="green")
+
+    for kw, cnt in sorted(kw_count.items()):
+        names = ", ".join(kw_names.get(kw, [])[:5])
+        if len(kw_names.get(kw, [])) > 5:
+            names += f" ... (+{len(kw_names[kw]) - 5})"
+        table.add_row(kw, str(cnt), names or "-")
+
+    console.print(table)
+    console.print(f"\n  共 {len(blocks)} 个块，{len(kw_count)} 种关键词\n")
+
+
+@inp_app.command()
+def check(
+    inp_file: Path = typer.Argument(..., help=".inp 文件路径"),
+) -> None:
+    """[bold]校验 .inp 文件（对照 kw_list.json）[/bold]"""
+    from cae.inp import InpParser, load_kw_list
+
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae inp check[/bold cyan] — INP 文件校验", border_style="cyan"))
+    console.print()
+
+    try:
+        parser = InpParser()
+        blocks = parser.parse(inp_file)
+    except Exception as exc:
+        err_console.print(f"\n  解析失败: {exc}\n")
+        raise typer.Exit(1)
+
+    kw_list = load_kw_list()
+    unknown_kw = []
+    missing_required: list[tuple[str, str]] = []
+
+    for b in blocks:
+        kw_def = kw_list.get(b.keyword_name)
+        if kw_def is None:
+            if b.keyword_name not in unknown_kw:
+                unknown_kw.append(b.keyword_name)
+        else:
+            # 检查必填参数
+            for arg in kw_def.get("arguments", []):
+                if arg.get("required") and not b.get_param(arg["name"]):
+                    missing_required.append((b.keyword_name, arg["name"]))
+
+    if unknown_kw:
+        console.print(f"  [yellow]未知关键词 ({len(unknown_kw)}):[/yellow]")
+        for kw in unknown_kw[:10]:
+            console.print(f"    {kw}")
+        if len(unknown_kw) > 10:
+            console.print(f"    ... (+{len(unknown_kw) - 10})")
+        console.print()
+
+    if missing_required:
+        console.print(f"  [yellow]缺少必填参数 ({len(missing_required)}):[/yellow]")
+        seen = set()
+        for kw, arg in missing_required[:10]:
+            key = f"{kw}:{arg}"
+            if key not in seen:
+                console.print(f"    {kw} → {arg} (必填)")
+                seen.add(key)
+        console.print()
+
+    if not unknown_kw and not missing_required:
+        console.print("  [green]校验通过：未发现问题[/green]\n")
+    else:
+        console.print(f"  共 {len(blocks)} 个块，已对照 kw_list.json 校验\n")
+
+
+@inp_app.command()
+def show(
+    inp_file: Path = typer.Argument(..., help=".inp 文件路径"),
+    keyword: str = typer.Option(None, "--keyword", "-k", help="关键词，如 *MATERIAL"),
+    name: str = typer.Option(None, "--name", "-n", help="NAME 参数值"),
+    limit: int = typer.Option(20, "--limit", "-l", help="最大显示行数"),
+) -> None:
+    """[bold]显示指定关键词块的内容[/bold]"""
+    from cae.inp import InpModifier
+
+    try:
+        mod = InpModifier(inp_file)
+    except Exception as exc:
+        err_console.print(f"\n  解析失败: {exc}\n")
+        raise typer.Exit(1)
+
+    blocks = mod.find_blocks(keyword=keyword.upper() if keyword else None, name=name)
+    if not blocks:
+        kw_hint = f" 关键词 '{keyword}'" if keyword else ""
+        name_hint = f" NAME='{name}'" if name else ""
+        console.print(f"  未找到{kw_hint}{name_hint}的块\n")
+        raise typer.Exit(0)
+
+    console.print(f"  找到 {len(blocks)} 个匹配的块：\n")
+    for i, b in enumerate(blocks):
+        console.print(f"  [cyan]--- Block {i+1}: {b.keyword_name} ---[/cyan]")
+        if b.lead_line:
+            console.print(f"    {b.lead_line}")
+        if b.data_lines:
+            for line in b.data_lines[:limit]:
+                console.print(f"    {line}")
+            if len(b.data_lines) > limit:
+                console.print(f"    ... (+{len(b.data_lines) - limit} 行)")
+        console.print()
+
+
+@inp_app.command()
+def modify(
+    inp_file: Path = typer.Argument(..., help=".inp 文件路径"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="输出文件路径"),
+    keyword: str = typer.Option(None, "--keyword", "-k", help="关键词，如 *MATERIAL"),
+    name: str = typer.Option(None, "--name", "-n", help="NAME 参数值"),
+    set_param: list[str] = typer.Option([], "--set", help="设置参数，格式 KEY=VALUE"),
+    delete: bool = typer.Option(False, "--delete", help="删除匹配的块"),
+) -> None:
+    """[bold]修改 .inp 文件（按关键词+NAME 定位）[/bold]"""
+    from cae.inp import InpModifier
+
+    if keyword is None and name is None and not delete:
+        err_console.print("\n  请指定 --keyword 或 --name，或使用 --delete\n")
+        raise typer.Exit(1)
+
+    out_path = output or inp_file.with_suffix(".modified.inp")
+
+    try:
+        mod = InpModifier(inp_file)
+    except Exception as exc:
+        err_console.print(f"\n  加载失败: {exc}\n")
+        raise typer.Exit(1)
+
+    if delete:
+        n = mod.delete_blocks(keyword=keyword.upper() if keyword else None, name=name)
+        console.print(f"  已删除 {n} 个块\n")
+
+    if set_param:
+        params = {}
+        for p in set_param:
+            if "=" in p:
+                k, v = p.split("=", 1)
+                params[k.strip()] = v.strip()
+        if params:
+            n = mod.update_blocks(
+                keyword=keyword.upper() if keyword else None,
+                name=name,
+                params=params,
+            )
+            console.print(f"  已更新 {n} 个块：{params}\n")
+
+    mod.write(out_path)
+    console.print(f"  已写入: [green]{out_path}[/green]\n")
+
+# ------------------------------------------------------------------ #
 # App 初始化
 # ------------------------------------------------------------------ #
 
@@ -42,6 +231,7 @@ app = typer.Typer(
     rich_markup_mode="rich",
     no_args_is_help=True,
 )
+app.add_typer(inp_app, name="inp")
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
