@@ -168,7 +168,11 @@ def _parse_nodes(lines: list[str], start: int) -> tuple[int, FrdNodes]:
 
 
 def _parse_elements(lines: list[str], start: int) -> tuple[int, list[FrdElement]]:
-    """解析单元拓扑块。"""
+    """解析单元拓扑块。
+
+    注意：C3D20R 等高阶单元的连接数据可能跨越多行（每行10个节点）。
+    需要累积所有连续的 ' -2' 行来构建完整的连接列表。
+    """
     elements: list[FrdElement] = []
     i = start + 1
 
@@ -185,16 +189,20 @@ def _parse_elements(lines: list[str], start: int) -> tuple[int, list[FrdElement]
                     i += 1
                     continue
 
-                # 下一行是节点连接
+                # 读取所有连续的 ' -2' 行（高阶单元连接数据可能跨多行）
+                connectivity: list[int] = []
                 i += 1
-                if i < len(lines) and lines[i].startswith(" -2"):
+                while i < len(lines) and lines[i].startswith(" -2"):
                     conn_parts = lines[i].split()[1:]
-                    connectivity = [int(x) for x in conn_parts]
+                    connectivity.extend(int(x) for x in conn_parts)
+                    i += 1
+                if connectivity:
                     elements.append(FrdElement(eid=eid, etype=etype, connectivity=connectivity))
         elif line.startswith(" -3"):
             i += 1
             break
-        i += 1
+        else:
+            i += 1
 
     return i, elements
 
