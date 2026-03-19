@@ -11,6 +11,7 @@
 - **交互式可视化**: 浏览器查看 VTK 结果（ParaView Glance）
 - **INP 文件处理**: 解析、检查、修改、模板生成、关键词浏览
 - **AI 智能辅助**: 解读结果、诊断问题、优化建议
+- **官方测试集**: 批量验证 CalculiX 官方测试文件
 - **Python API**: 底层模块可独立使用
 
 ## 安装
@@ -230,6 +231,26 @@ cae info
 #   - 当前 AI 模型
 ```
 
+### 7. 测试
+
+```bash
+# 运行 CalculiX 官方测试集批量测试
+cae test
+# 使用 ccx_2.23.test 测试集（共 638 个文件）验证：
+#   Phase 1: inp info 解析
+#   Phase 2: solve 求解（采样）
+#   Phase 3: convert 格式转换（采样）
+
+# 指定采样数量
+cae test --sample 20
+
+# 指定测试目录
+cae test --test-dir /path/to/test/files
+
+# 静默模式（只显示结果摘要）
+cae test --quiet
+```
+
 ---
 
 ## 内置模板
@@ -278,6 +299,9 @@ cae-cli/
 │   │   └── prompts.py       # Prompt 模板
 │   └── config/              # 配置管理
 │       └── __init__.py      # settings 单例
+├── test/                   # 测试模块
+│   ├── __init__.py
+│   └── official.py          # 官方测试集批量测试
 ├── examples/               # 示例文件
 │   ├── *.inp               # Abaqus 格式输入文件
 │   └── *.step               # STEP 几何文件
