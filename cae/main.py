@@ -358,15 +358,15 @@ def suggest(
 # cae inp list — 浏览关键词分类
 # ------------------------------------------------------------------ #
 
-@inp_app.command()
-def list(
+@inp_app.command("list")
+def list_keywords_cmd(
     category: Optional[str] = typer.Argument(
         None,
         help="分类名称（如 Mesh/Properties/Step）",
         show_default=False,
     ),
-    keyword: Optional[str] = typer.Argument(
-        None,
+    keyword: Optional[str] = typer.Option(
+        None, "--keyword", "-k",
         help="关键词名称（如 *NODE）",
         show_default=False,
     ),
