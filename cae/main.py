@@ -12,11 +12,16 @@ CLI 框架：Typer + Rich
   cae mesh [GEO_FILE]     — 交互式网格划分（Gmsh）          （第三周）
   cae run [MODEL_FILE]    — 全流程一键运行                  （第三周）
   cae inp                  — INP 文件解析、检查、修改         （第四周）
+  cae test                 — CalculiX 官方测试集批量测试    （第四周）
 
 后续周次将补充：
   cae install / cae explain / cae diagnose / cae suggest
 """
 from __future__ import annotations
+
+import os
+# 确保子进程使用 UTF-8 编码（避免 Windows GBK 编码问题）
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 from pathlib import Path
 from typing import Optional
@@ -531,6 +536,12 @@ app = typer.Typer(
 )
 app.add_typer(inp_app, name="inp")
 app.add_typer(mesh_app, name="mesh")
+
+import sys
+# Windows MSYS 环境：强制 stdout/stderr 使用 UTF-8
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 console = Console(legacy_windows=False, force_terminal=True)
 err_console = Console(stderr=True, style="bold red", legacy_windows=False)
