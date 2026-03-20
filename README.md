@@ -5,7 +5,7 @@
 <p align="center">
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![PyPI](https://img.shields.io/badge/PyPI-cae--cxx%20v1.1.0-blue.svg)](https://pypi.org/project/cae-cxx/)
+[![PyPI](https://img.shields.io/badge/PyPI-cae--cxx%20v1.2.0-blue.svg)](https://pypi.org/project/cae-cxx/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Test](https://img.shields.io/badge/Tests-638%2F638-brightgreen.svg)](#兼容性验证)
 [![CalculiX](https://img.shields.io/badge/CalculiX-2.22+-orange.svg)](https://www.calculix.org/)
@@ -284,34 +284,52 @@ cae inp template flat_plate -o plate.inp --Lx=200 --Ly=100 --pressure=5.0
 cae-cli/
 ├── cae/
 │   ├── main.py              # CLI 入口 (Typer)
+│   ├── enums.py             # 枚举定义
+│   ├── _utils.py            # 工具函数 (f2s 格式化)
 │   ├── solvers/             # 求解器接口
 │   │   ├── base.py         # 抽象基类
 │   │   └── calculix.py     # CalculiX 实现
 │   ├── inp/                 # INP 文件处理
 │   │   ├── kw_list.json    # 135 关键词参数
 │   │   ├── kw_tree.json    # 关键词分类
-│   │   └── template.py     # Jinja2 模板
+│   │   ├── template.py     # Jinja2 模板
+│   │   ├── step_keywords.py # 载荷步关键词 (CLOAD/DLOAD/BOUNDARY)
+│   │   └── steps.py        # 载荷步类 (Static/Dynamic/Frequency/Buckle)
 │   ├── mesh/                # 网格处理
-│   │   ├── gmsh_runner.py   # Gmsh API
-│   │   └── converter.py     # meshio 转换
+│   │   ├── element.py       # 单元类型定义
+│   │   ├── surface.py       # 接触面/载荷面定义
+│   │   ├── gmsh_runner.py  # Gmsh API
+│   │   └── converter.py    # meshio 转换
+│   ├── contact/             # 接触分析
+│   │   ├── surface_interaction.py  # 表面相互作用
+│   │   ├── surface_behavior.py     # 表面行为 (压力过盈)
+│   │   ├── friction.py             # 摩擦模型
+│   │   ├── contact_pair.py         # 接触对
+│   │   └── tie.py                  # 绑定接触
+│   ├── coupling/            # 耦合约束
+│   │   ├── coupling.py      # KINEMATIC/DISTRIBUTING 耦合
+│   │   └── mpc.py           # MPC 多点约束
+│   ├── material/            # 材料模型
+│   │   ├── elastic.py       # 弹性模型 (ISO/ORTHO/ANISO)
+│   │   └── plastic.py       # 塑性模型 (等向/运动/组合硬化)
 │   ├── viewer/              # 可视化
-│   │   ├── frd_parser.py   # FRD 解析
-│   │   ├── vtk_export.py   # VTK 导出
+│   │   ├── frd_parser.py    # FRD 解析
+│   │   ├── dat_parser.py    # DAT 解析
+│   │   ├── vtk_export.py    # VTK 导出
 │   │   ├── pyvista_renderer.py  # PyVista 渲染引擎
-│   │   ├── mesh_check.py   # 网格预览 HTML
-│   │   ├── html_generator.py   # HTML 报告生成器
-│   │   └── pdf_report.py   # PDF 报告生成器
+│   │   ├── mesh_check.py    # 网格预览 HTML
+│   │   ├── html_generator.py    # HTML 报告生成器
+│   │   └── pdf_report.py    # PDF 报告生成器
 │   ├── ai/                  # AI 功能
-│   │   ├── llm_client.py   # LLM 接口
-│   │   ├── explain.py      # 结果解读
-│   │   ├── diagnose.py      # 问题诊断
-│   │   └── suggest.py       # 优化建议
-│   └── installer/            # 安装器
+│   │   ├── llm_client.py    # LLM 接口
+│   │   ├── explain.py       # 结果解读
+│   │   ├── diagnose.py       # 问题诊断
+│   │   └── suggest.py        # 优化建议
+│   └── installer/           # 安装器
 │       ├── solver_installer.py
 │       └── model_installer.py
-├── test/
-│   └── official.py          # 批量测试
-└── examples/               # 示例文件
+├── tests/                  # 测试用例
+└── examples/              # 示例文件
 ```
 
 ---
