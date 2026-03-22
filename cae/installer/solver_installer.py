@@ -107,12 +107,15 @@ class SolverInstaller:
         """获取安装目录"""
         return self.bin_dir
 
-    def _get_download_url(self) -> str:
-        """获取下载链接"""
-        return (
-            f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/"
-            f"{RELEASE_VERSION}/{self.archive_name}"
-        )
+    def _get_download_urls(self) -> list[str]:
+        """获取下载链接列表（按优先级）"""
+        base_urls = [
+            f"https://ghproxy.net/https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_VERSION}/{self.archive_name}",
+            f"https://gh-proxy.com/https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_VERSION}/{self.archive_name}",
+            f"https://mirror.ghproxy.com/https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_VERSION}/{self.archive_name}",
+            f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_VERSION}/{self.archive_name}",
+        ]
+        return base_urls
 
     def _get_cae_dir(self) -> Path:
         """获取 .cae-cli 目录"""
@@ -145,18 +148,32 @@ class SolverInstaller:
         archive_path: Path
         if local_archive and local_archive.exists():
             archive_path = local_archive
-            download_url = None
+            download_urls = None
         else:
             archive_path = self.cae_home / self.archive_name
-            download_url = self._get_download_url()
+            download_urls = self._get_download_urls()
 
         try:
-            if download_url:
-                if progress_callback:
-                    progress_callback(0.05, "正在连接...")
+            if download_urls:
+                # 尝试多个镜像源
+                download_success = False
+                last_error = ""
+                for url in download_urls:
+                    if progress_callback:
+                        progress_callback(0.02, f"尝试下载源: {url[:50]}...")
 
-                # 下载压缩包
-                self._download_file(download_url, archive_path, progress_callback)
+                    try:
+                        self._download_file(url, archive_path, progress_callback)
+                        download_success = True
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        if progress_callback:
+                            progress_callback(0.02, f"下载失败，尝试下一个源...")
+                        continue
+
+                if not download_success:
+                    raise RuntimeError(f"所有下载源均失败: {last_error}")
 
             if progress_callback:
                 progress_callback(0.65, "正在解压...")
@@ -202,32 +219,16 @@ class SolverInstaller:
             )
 
     def _download_file(self, url: str, dest: Path, progress_callback: Optional[callable] = None) -> None:
-        """下载文件"""
-        import ssl
-
-        # 创建 SSL 上下文（解决证书问题）
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
+        """下载文件，失败时抛出异常"""
         # 使用 curl 下载（更可靠）
-        try:
-            result = subprocess.run(
-                ["curl", "-L", "-o", str(dest), url, "--progress-bar"],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"下载失败: {result.stderr}")
-        except FileNotFoundError:
-            # 回退到 urllib
-            def report_progress(block_num, block_size, total_size):
-                if progress_callback and total_size > 0:
-                    percent = min(block_num * block_size / total_size * 0.6, 0.6)
-                    progress_callback(percent, "下载中...")
-
-            urlretrieve(url, dest, reporthook=report_progress)
+        result = subprocess.run(
+            ["curl", "-L", "-o", str(dest), url, "--progress-bar", "--connect-timeout", "30", "-m", "300"],
+            capture_output=True,
+            text=True,
+            timeout=360,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"curl 下载失败: {result.stderr.strip()[:200]}")
 
     def _extract_archive(self, archive_path: Path) -> None:
         """解压压缩包"""
