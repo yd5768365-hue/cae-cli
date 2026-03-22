@@ -39,6 +39,9 @@ class Friction:
     lam: float
     """粘滑斜率（stick-slope），单位力/体积（> 0）"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*FRICTION"
+    """关键词名称"""
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "mue" and value <= 0:

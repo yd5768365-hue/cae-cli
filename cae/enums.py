@@ -292,8 +292,11 @@ class HyperElasticType(str, Enum):
     OGDEN_4 = "OGDEN,N=4"
     POLYNOMIAL_1 = "POLYNOMIAL,N=1"
     POLYNOMIAL_2 = "POLYNOMIAL,N=2"
+    POLYNOMIAL_3 = "POLYNOMIAL,N=3"
     REDUCED_POLYNOMIAL_1 = "REDUCED POLYNOMIAL,N=1"
     REDUCED_POLYNOMIAL_2 = "REDUCED POLYNOMIAL,N=2"
+    REDUCED_POLYNOMIAL_3 = "REDUCED POLYNOMIAL,N=3"
+    YEOH = "YEOH"
 
 
 # =============================================================================

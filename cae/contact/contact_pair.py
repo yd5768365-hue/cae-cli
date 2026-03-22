@@ -70,6 +70,9 @@ class ContactPair:
     name: str = ""
     """接触对名称"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*CONTACT PAIR"
+    """关键词名称"""
 
     _is_initialized: bool = field(init=False, default=False)
 

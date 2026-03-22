@@ -62,6 +62,9 @@ class SurfaceBehavior:
     table: Optional[Sequence[Sequence[float]]] = field(default=None)
     """压力-间隙表格数据（TABULAR 必须）"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*SURFACE BEHAVIOR"
+    """关键词名称"""
 
     _is_initialized: bool = field(init=False, default=False)
 

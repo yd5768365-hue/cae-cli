@@ -4,19 +4,100 @@ Step Keywords 载荷步关键词模块
 提供 Step 内使用的载荷、边界条件等关键词类。
 
 类层次：
-  Cload    # 集中载荷
-  Dload    # 分布载荷
-  Boundary # 边界条件
+  Amplitude  # 幅值曲线
+  Cload      # 集中载荷
+  Dload      # 分布载荷
+  Boundary   # 边界条件
 
-参考 pygccx step_keywords/cload.py, dload.py, boundary.py 设计
+参考 pygccx step_keywords/ 设计
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, Sequence
 
-from cae.enums import LoadOp, DloadType
+from cae.enums import LoadOp, DloadType, CouplingType
 from cae._utils import f2s
+
+
+# =============================================================================
+# Amplitude 幅值曲线
+# =============================================================================
+
+@dataclass
+class Amplitude:
+    """
+    幅值曲线（AMPLITUDE）。
+
+    定义载荷或边界条件相对于时间的幅值变化。
+
+    Args:
+        name: 幅值曲线名称
+        times: 时间序列（与 amps 长度相同）
+        amps: 幅值序列（与 times 长度相同）
+        use_total_time: 是否使用总时间
+        shift_x: X方向（时间）平移量
+        shift_y: Y方向（幅值）平移量
+        desc: 描述文本
+
+    Example:
+        >>> # 定义一个简单的 ramp 载荷
+        >>> amp = Amplitude(name="RAMP1", times=[0, 1, 2], amps=[0, 1, 1])
+        >>> # 定义带平移的幅值
+        >>> amp = Amplitude(name="SHIFTED", times=[0, 1],
+        ...                 amps=[0, 100], shift_x=0.5, shift_y=10)
+    """
+
+    name: str
+    """幅值曲线名称"""
+    times: Sequence[float]
+    """时间序列"""
+    amps: Sequence[float]
+    """幅值序列"""
+    use_total_time: bool = False
+    """是否使用总时间"""
+    shift_x: Optional[float] = None
+    """X方向（时间）平移量"""
+    shift_y: Optional[float] = None
+    """Y方向（幅值）平移量"""
+    desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*AMPLITUDE"
+    """关键词名称"""
+
+    def __post_init__(self):
+        if len(self.times) != len(self.amps):
+            raise ValueError(
+                f"times 和 amps 长度必须相同，"
+                f"当前 times={len(self.times)}, amps={len(self.amps)}"
+            )
+        if len(self.times) < 2:
+            raise ValueError("幅值曲线至少需要 2 个数据点")
+
+    def to_inp_lines(self) -> list[str]:
+        """转换为 INP 文件行。"""
+        lines = []
+
+        # AMPLITUDE 行
+        line = f"*AMPLITUDE,NAME={self.name}"
+        if self.use_total_time:
+            line += ",TIME=TOTAL TIME"
+        if self.shift_x is not None:
+            line += f",SHIFTX={f2s(self.shift_x)}"
+        if self.shift_y is not None:
+            line += f",SHIFTY={f2s(self.shift_y)}"
+        lines.append(line)
+        if self.desc:
+            lines.append(f"** {self.desc}")
+
+        # 数据行
+        for t, a in zip(self.times, self.amps):
+            lines.append(f"{f2s(t)},{f2s(a)}")
+
+        return lines
+
+    def __str__(self) -> str:
+        return "\n".join(self.to_inp_lines())
 
 
 @dataclass
@@ -43,9 +124,11 @@ class Cload:
         >>> c = Cload(node_ids=100, dofs={1: 10.0, 2: -5.0, 6: 0.5})
     """
 
-    node_ids: Union[set[int], int]
+    keyword_name: str = "*CLOAD"
+    """关键词名称"""
+    node_ids: Union[set[int], int] = field(default_factory=lambda: set())
     """节点 ID 集合或单个节点 ID"""
-    dofs: dict[int, float]
+    dofs: dict[int, float] = field(default_factory=dict)
     """自由度字典，key=DOF编号，value=幅值"""
     op: LoadOp = LoadOp.MOD
     """操作选项"""
@@ -125,11 +208,13 @@ class Dload:
         ...           magnitude=(-1.0))  # 压力值
     """
 
-    elset_name: str
+    keyword_name: str = "*DLOAD"
+    """关键词名称"""
+    elset_name: str = ""
     """单元集名称"""
-    load_type: DloadType
+    load_type: DloadType = DloadType.GRAV
     """分布载荷类型"""
-    magnitude: tuple[float, ...]
+    magnitude: tuple[float, ...] = ()
     """载荷参数（取决于 load_type）"""
     op: LoadOp = LoadOp.MOD
     """操作选项"""
@@ -256,6 +341,9 @@ class Boundary:
     name: str = ""
     """边界条件名称"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*BOUNDARY"
+    """关键词名称"""
 
     def __post_init__(self):
         self._validate()
@@ -316,6 +404,115 @@ class Boundary:
                     lines.append(f"{nid},{dof}")
                 else:
                     lines.append(f"{nid},{dof},{f2s(val)}")
+
+        return lines
+
+    def __str__(self) -> str:
+        return "\n".join(self.to_inp_lines())
+
+
+# =============================================================================
+# Coupling 耦合约束
+# =============================================================================
+
+@dataclass
+class Coupling:
+    """
+    耦合约束（COUPLING）。
+
+    在参考节点和单元面上定义运动耦合或分布耦合。
+
+    - KINEMATIC: 运动耦合，节点位移与参考节点刚体运动协调
+    - DISTRIBUTING: 分布耦合，力/力矩按面积权重分配到参考节点
+
+    Args:
+        coupling_type: 耦合类型（DISTRIBUTING 或 KINEMATIC）
+        ref_node: 参考节点 ID
+        surface_name: 单元面表面名称（通过 *SURFACE 定义）
+        name: 耦合约束名称
+        first_dof: 第一个自由度（1-6）
+        last_dof: 最后一个自由度（可选，默认同 first_dof）
+        orientation_name: 局部坐标系名称（可选）
+        cyclic_symmetry: 是否循环对称（仅 DISTRIBUTING）
+        desc: 描述文本
+
+    Example:
+        >>> # 运动耦合
+        >>> c = Coupling(
+        ...     coupling_type=CouplingType.KINEMATIC,
+        ...     ref_node=1000,
+        ...     surface_name='FACE_LOAD',
+        ...     name='COUP_HEAD',
+        ...     first_dof=1,
+        ...     last_dof=6
+        ... )
+        >>> # 分布耦合
+        >>> c = Coupling(
+        ...     coupling_type=CouplingType.DISTRIBUTING,
+        ...     ref_node=1000,
+        ...     surface_name='FACE_LOAD',
+        ...     name='COUP_DIST',
+        ...     first_dof=3,
+        ...     cyclic_symmetry=True
+        ... )
+    """
+
+    coupling_type: CouplingType
+    """耦合类型"""
+    ref_node: int
+    """参考节点 ID"""
+    surface_name: str
+    """单元面表面名称"""
+    name: str
+    """耦合约束名称"""
+    first_dof: int
+    """第一个自由度（1-6）"""
+    last_dof: Optional[int] = None
+    """最后一个自由度（可选）"""
+    orientation_name: Optional[str] = None
+    """局部坐标系名称"""
+    cyclic_symmetry: bool = False
+    """是否循环对称（仅 DISTRIBUTING）"""
+    desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*COUPLING"
+    """关键词名称"""
+
+    def __post_init__(self):
+        if self.first_dof < 1 or self.first_dof > 6:
+            raise ValueError(f"first_dof 必须在 1-6 之间，当前值: {self.first_dof}")
+        if self.last_dof is not None:
+            if self.last_dof < 1 or self.last_dof > 6:
+                raise ValueError(f"last_dof 必须在 1-6 之间，当前值: {self.last_dof}")
+            if self.last_dof < self.first_dof:
+                raise ValueError(f"last_dof ({self.last_dof}) 必须 >= first_dof ({self.first_dof})")
+        if self.coupling_type != CouplingType.DISTRIBUTING and self.cyclic_symmetry:
+            raise ValueError("cyclic_symmetry 仅适用于 DISTRIBUTING 类型")
+
+    def to_inp_lines(self) -> list[str]:
+        """转换为 INP 文件行。"""
+        lines = []
+
+        # COUPLING 行
+        line = f"*COUPLING,CONSTRAINT NAME={self.name},REF NODE={self.ref_node},SURFACE={self.surface_name}"
+        if self.orientation_name:
+            line += f",ORIENTATION={self.orientation_name}"
+        lines.append(line)
+
+        # 类型行
+        type_line = self.coupling_type.value
+        if self.coupling_type == CouplingType.DISTRIBUTING and self.cyclic_symmetry:
+            type_line += ",CYCLIC SYMMETRY"
+        lines.append(type_line)
+
+        # 自由度行
+        dof_line = str(self.first_dof)
+        if self.last_dof is not None:
+            dof_line += f",{self.last_dof}"
+        lines.append(dof_line)
+
+        if self.desc:
+            lines.insert(1, f"** {self.desc}")
 
         return lines
 

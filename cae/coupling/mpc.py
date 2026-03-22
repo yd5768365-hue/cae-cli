@@ -54,6 +54,9 @@ class Mpc:
     name: str = ""
     """MPC 名称"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*MPC"
+    """关键词名称"""
 
     def __post_init__(self):
         # 验证节点 ID

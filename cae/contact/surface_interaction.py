@@ -30,6 +30,8 @@ class SurfaceInteraction:
     """表面相互作用名称（最多 80 字符）"""
     desc: str = ""
     """描述文本"""
+    keyword_name: str = "*SURFACE INTERACTION"
+    """关键词名称"""
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "name" and len(value) > 80:

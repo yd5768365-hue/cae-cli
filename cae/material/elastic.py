@@ -62,6 +62,8 @@ class Elastic:
     """材料名称（用于识别）"""
     desc: str = ""
     """描述文本"""
+    keyword_name: str = "*ELASTIC"
+    """关键词名称"""
 
     _params_for_temps: list[tuple] = field(default_factory=list, init=False)
 

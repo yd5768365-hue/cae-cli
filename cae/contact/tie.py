@@ -63,6 +63,9 @@ class Tie:
     multistage: bool = False
     """是否为多阶段耦合"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*TIE"
+    """关键词名称"""
 
     _is_initialized: bool = field(init=False, default=False)
 

@@ -19,11 +19,12 @@ from cae.viewer.frd_parser import (
     FrdResultStep,
     parse_frd,
 )
+from cae.enums import FrdResultEntity
 from cae.viewer.vtk_export import (
     VtkExportResult,
-    _von_mises,
     frd_to_vtu,
 )
+from cae.viewer._utils import von_mises as _von_mises
 
 
 # ================================================================== #
@@ -61,8 +62,8 @@ class TestFrdData:
         assert FrdData().node_count == 0
 
     def test_get_result_by_name(self):
-        r1 = FrdResultStep(step=1, time=0.0, name="DISP", components=[], values=[], node_ids=[])
-        r2 = FrdResultStep(step=1, time=0.0, name="STRESS", components=[], values=[], node_ids=[])
+        r1 = FrdResultStep(step=1, time=0.0, name="DISP", components=[], values={}, node_ids=[], entity=FrdResultEntity.DISP)
+        r2 = FrdResultStep(step=1, time=0.0, name="STRESS", components=[], values={}, node_ids=[], entity=FrdResultEntity.STRESS)
         d = FrdData(results=[r1, r2])
         assert d.get_result("DISP") is r1
         assert d.get_result("STRESS") is r2
@@ -73,7 +74,7 @@ class TestFrdData:
 
     def test_get_result_last_step(self):
         steps = [
-            FrdResultStep(step=i, time=float(i), name="DISP", components=[], values=[], node_ids=[])
+            FrdResultStep(step=i, time=float(i), name="DISP", components=[], values={}, node_ids=[], entity=FrdResultEntity.DISP)
             for i in range(1, 4)
         ]
         d = FrdData(results=steps)
@@ -399,11 +400,11 @@ class TestPrincipalShearStresses:
     """主剪切应力计算测试"""
 
     def test_pure_shear(self):
-        """纯剪切 S12=τ → τ12=τ, τ13=τ/2, τ23=τ/2"""
+        """纯剪切 S12=τ → τ12=τ/2, τ13=τ, τ23=τ/2"""
         tau = 100.0
         stress = np.array([[0, 0, 0, tau, 0, 0]])
         shear = get_principal_shear_stresses(stress)
-        assert pytest.approx(shear[0][0], abs=1e-6) == tau  # |σ1-σ2|/2 = |τ|/2
+        assert pytest.approx(shear[0][0], abs=1e-6) == tau / 2  # |σ1-σ2|/2 = |τ|/2
         # 对于纯剪切，主应力是 [τ, 0, -τ]
         # τ12 = |τ - 0|/2 = τ/2
         # τ13 = |τ - (-τ)|/2 = τ

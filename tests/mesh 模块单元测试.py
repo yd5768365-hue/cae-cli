@@ -26,6 +26,7 @@ from cae.mesh.converter import (
     detect_format,
     READABLE_FORMATS,
     WRITABLE_FORMATS,
+    _HAS_MESHIO,
 )
 
 
@@ -208,6 +209,7 @@ class TestDetectFormat:
         assert detect_format(Path("model.abc")) is None
 
 
+@pytest.mark.skipif(not _HAS_MESHIO, reason="meshio not installed")
 class TestConvertMesh:
     def _mock_mesh(self, n_nodes=8, n_cells=1):
         import meshio
@@ -297,6 +299,7 @@ class TestConvertMesh:
         assert r.target_format == ".vtu"
 
 
+@pytest.mark.skipif(not _HAS_MESHIO, reason="meshio not installed")
 class TestShortcuts:
     def _mock_mesh(self):
         import meshio
@@ -335,6 +338,7 @@ class TestShortcuts:
         assert r.output_file == tmp_path / "job.inp"
 
 
+@pytest.mark.skipif(not _HAS_MESHIO, reason="meshio not installed")
 class TestOrphanedNodeRemoval:
     def test_removes_orphaned(self):
         """孤立节点（未被任何单元引用）应该被删除。"""

@@ -47,6 +47,9 @@ class CyclicHardening:
     name: str = ""
     """名称"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*CYCLIC HARDENING"
+    """关键词名称"""
 
     _params_for_temps: list[tuple] = field(default_factory=list, init=False)
 
@@ -128,6 +131,9 @@ class Plastic(CyclicHardening):
     name: str = ""
     """材料名称"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*PLASTIC"
+    """关键词名称"""
 
     _cyclic_hardening: CyclicHardening | None = field(default=None, init=False, repr=False)
 

@@ -68,6 +68,9 @@ class Coupling:
     cyclic_symmetry: bool = False
     """是否循环对称（仅 DISTRIBUTING）"""
     desc: str = ""
+    """描述文本"""
+    keyword_name: str = "*COUPLING"
+    """关键词名称"""
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "surface":

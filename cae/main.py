@@ -458,21 +458,28 @@ def template(
     title: Optional[str] = typer.Option(None, "--title", help="模型标题"),
     E: Optional[float] = typer.Option(None, "--E", help="弹性模量 (MPa)"),
     L: Optional[float] = typer.Option(None, "--L", help="长度 (mm)"),
+    Lx: Optional[float] = typer.Option(None, "--Lx", help="板长 (mm)"),
+    Ly: Optional[float] = typer.Option(None, "--Ly", help="板宽 (mm)"),
+    pressure: Optional[float] = typer.Option(None, "--pressure", help="均匀压力 (MPa)"),
     load_value: Optional[float] = typer.Option(None, "--load", help="载荷值"),
+    load_type: Optional[str] = typer.Option(None, "--load-type", help="载荷类型 (force/moment/pressure)"),
     n_nodes: Optional[int] = typer.Option(None, "--nodes", help="节点数"),
     n_elements: Optional[int] = typer.Option(None, "--elements", help="单元数"),
+    n_x: Optional[int] = typer.Option(None, "--n-x", help="X方向节点数"),
+    n_y: Optional[int] = typer.Option(None, "--n-y", help="Y方向节点数"),
+    thickness: Optional[float] = typer.Option(None, "--thickness", help="板厚 (mm)"),
 ) -> None:
-    """[bold]生成 INP 模板[/bold] — 使用参数化模板生成 .inp 文件"""
-    from cae.inp.template import list_templates as lt, get_template, render_to_file
+    """[bold]生成 INP 模板[/bold] — 使用 Python 类生成参数化 .inp 文件"""
+    from cae.inp.model_builder import CantileverBeam, FlatPlate
 
     # 列出模板
     if list_templates:
-        templates = lt()
         console.print()
         console.print(Panel.fit("[bold cyan]可用模板[/bold cyan]", border_style="cyan"))
-        for t in templates:
-            console.print(f"\n  [bold]{t.name}[/bold] — {t.description}")
-            console.print(f"    文件: {t.file.name}")
+        console.print("\n  [bold]cantilever_beam[/bold] — 悬臂梁 (B32 梁单元)")
+        console.print("    参数: --L, --load, --nodes, --load-type, --E")
+        console.print("\n  [bold]flat_plate[/bold] — 平板 (S4 壳单元，四角固支)")
+        console.print("    参数: --Lx, --Ly, --thickness, --n-x, --n-y, --pressure, --load-type")
         console.print()
         return
 
@@ -482,45 +489,72 @@ def template(
         console.print("  使用 --list 查看所有模板")
         return
 
-    # 获取模板
-    tmpl = get_template(name)
-    if tmpl is None:
-        console.print(f"  [red]未知模板: {name}[/red]")
-        console.print(f"  可用模板: {', '.join(t.name for t in lt())}")
-        return
-
-    # 显示参数
-    if show_params:
-        console.print()
-        console.print(Panel.fit(f"[bold cyan]{tmpl.name}[/bold cyan] — {tmpl.description}", border_style="cyan"))
-        console.print("\n  参数:")
-        for pname, ptype, pdesc in tmpl.params:
-            console.print(f"    [yellow]{pname}[/yellow] ({ptype}): {pdesc}")
-        console.print()
-        return
-
-    # 收集参数
-    params = {}
-    if title is not None:
-        params["title"] = title
-    if E is not None:
-        params["E"] = E
-    if L is not None:
-        params["L"] = L
-    if load_value is not None:
-        params["load_value"] = load_value
-    if n_nodes is not None:
-        params["n_nodes"] = n_nodes
-    if n_elements is not None:
-        params["n_elements"] = n_elements
-
-    # 渲染模板
+    # 生成 INP 内容
     try:
-        out_path = render_to_file(name, output or Path(f"{name}.inp"), **params)
+        if name == "cantilever_beam":
+            # 收集参数
+            kwargs = {}
+            if title is not None:
+                kwargs["title"] = title
+            if E is not None:
+                kwargs["E"] = E
+            if L is not None:
+                kwargs["L"] = L
+            if load_value is not None:
+                kwargs["load_value"] = load_value
+            if n_nodes is not None:
+                kwargs["n_nodes"] = n_nodes
+            if n_elements is not None:
+                kwargs["n_elements"] = n_elements
+            if load_type is not None:
+                kwargs["load_type"] = load_type
+
+            beam = CantileverBeam(**kwargs)
+            content = beam.to_inp()
+
+        elif name == "flat_plate":
+            # 收集参数
+            kwargs = {}
+            if title is not None:
+                kwargs["title"] = title
+            if E is not None:
+                kwargs["E"] = E
+            if Lx is not None:
+                kwargs["Lx"] = Lx
+            if Ly is not None:
+                kwargs["Ly"] = Ly
+            if pressure is not None:
+                kwargs["pressure"] = pressure
+            if load_value is not None:
+                kwargs["load_value"] = load_value
+            if load_type is not None:
+                kwargs["load_type"] = load_type
+            if n_x is not None:
+                kwargs["n_x"] = n_x
+            if n_y is not None:
+                kwargs["n_y"] = n_y
+            if thickness is not None:
+                kwargs["thickness"] = thickness
+
+            plate = FlatPlate(**kwargs)
+            content = plate.to_inp()
+
+        else:
+            console.print(f"  [red]未知模板: {name}[/red]")
+            console.print(f"  可用模板: cantilever_beam, flat_plate")
+            console.print("  使用 --list 查看所有模板")
+            return
+
+        # 写入文件
+        out_path = output or Path(f"{name}.inp")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
         console.print(f"  [green]生成成功: {out_path}[/green]")
         console.print(f"  使用 --params 查看所有参数")
+
     except Exception as e:
-        console.print(f"  [red]渲染失败: {e}[/red]")
+        console.print(f"  [red]生成失败: {e}[/red]")
 
 
 # ------------------------------------------------------------------ #

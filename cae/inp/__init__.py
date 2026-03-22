@@ -29,6 +29,20 @@ __all__ = [
     "validate_block",
     "suggest_inp_modifications",
     "replace_values",
+    # 模型构建器
+    "ModelBuilder",
+    "CantileverBeam",
+    "FlatPlate",
+    # 载荷步关键词
+    "Amplitude",
+    "Cload",
+    "Dload",
+    "Boundary",
+    "Coupling",
+    # 方程约束
+    "Equation",
+    "EquationTerm",
+    "EquationFactory",
 ]
 
 # ------------------------------------------------------------------ #
@@ -997,3 +1011,12 @@ def _find_keyword_path(
                     if _find_keyword_path({sub_key: content[sub_key]}, target, current_path, result):
                         return True
     return False
+
+
+# ------------------------------------------------------------------ #
+# 载荷步关键词导入
+# ------------------------------------------------------------------ #
+
+from cae.inp.step_keywords import Amplitude, Cload, Dload, Boundary, Coupling
+from cae.inp.model_builder import ModelBuilder, CantileverBeam, FlatPlate
+from cae.inp.equation import Equation, EquationTerm, EquationFactory
