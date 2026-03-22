@@ -58,14 +58,15 @@ def get_archive_name(platform_name: str) -> str:
 class SolverInstaller:
     """CalculiX 求解器安装器"""
 
-    def __init__(self):
+    def __init__(self, install_dir: Optional[Path] = None):
         self.platform = get_platform()
         self.archive_name = get_archive_name(self.platform)
 
-        # ~/.cae-cli/solvers/calculix/
+        # 自定义安装目录或默认 ~/.cae-cli/solvers/calculix/
+        self._custom_dir = install_dir
         self.cae_home = Path.home() / ".cae-cli"
-        self.solvers_dir = self.cae_home / "solvers" / "calculix"
-        self.bin_dir = self.solvers_dir / "bin"
+        self._default_solvers_dir = self.cae_home / "solvers" / "calculix"
+        self._default_bin_dir = self._default_solvers_dir / "bin"
 
         # 项目内置求解器目录（用于分发）
         self._builtin_dirs = [
@@ -74,8 +75,28 @@ class SolverInstaller:
             Path(__file__).parent.parent.parent / "CalculiX-Portable" / "bin",  # CalculiX-Portable/bin/
         ]
 
-    def is_installed(self) -> bool:
+    @property
+    def bin_dir(self) -> Path:
+        """获取 bin 目录"""
+        if self._custom_dir:
+            return self._custom_dir / "bin" if self._custom_dir.name != "bin" else self._custom_dir
+        return self._default_bin_dir
+
+    @property
+    def solvers_dir(self) -> Path:
+        """获取 solvers 目录"""
+        if self._custom_dir:
+            return self._custom_dir.parent if self._custom_dir.name == "bin" else self._custom_dir
+        return self._default_solvers_dir
+
+    def is_installed(self, custom_path: Optional[Path] = None) -> bool:
         """检查是否已安装"""
+        if custom_path:
+            check_dir = custom_path / "bin" if custom_path.name != "bin" else custom_path
+            if self.platform == "windows":
+                return (check_dir / "ccx.exe").is_file()
+            else:
+                return (check_dir / "ccx").is_file()
         # 优先检查 ccx.exe（static 版本）
         if self.platform == "windows":
             return (self.bin_dir / "ccx.exe").is_file()
@@ -101,6 +122,7 @@ class SolverInstaller:
         self,
         progress_callback: Optional[callable] = None,
         local_archive: Optional[Path] = None,
+        force: bool = False,
     ) -> InstallResult:
         """
         安装 CalculiX
@@ -108,11 +130,12 @@ class SolverInstaller:
         Args:
             progress_callback: 进度回调函数 (percent: float, message: str)
             local_archive: 本地压缩包路径（用于测试）
+            force: 强制重新安装
 
         Returns:
             InstallResult
         """
-        if self.is_installed():
+        if self.is_installed() and not force:
             return InstallResult(success=True, method="already_installed")
 
         # 确保安装目录存在
@@ -130,19 +153,19 @@ class SolverInstaller:
         try:
             if download_url:
                 if progress_callback:
-                    progress_callback(0.1, "正在下载...")
+                    progress_callback(0.05, "正在连接...")
 
                 # 下载压缩包
                 self._download_file(download_url, archive_path, progress_callback)
 
             if progress_callback:
-                progress_callback(0.7, "正在解压...")
+                progress_callback(0.65, "正在解压...")
 
             # 解压
             self._extract_archive(archive_path)
 
             if progress_callback:
-                progress_callback(0.9, "正在清理...")
+                progress_callback(0.90, "正在清理...")
 
             # 清理压缩包
             if archive_path.exists():
@@ -152,9 +175,10 @@ class SolverInstaller:
             if self.is_installed():
                 if progress_callback:
                     progress_callback(1.0, "安装完成")
+                method = "reinstalled_from_github" if force else "downloaded_from_github"
                 return InstallResult(
                     success=True,
-                    method=f"downloaded_from_github",
+                    method=method,
                     install_dir=self.bin_dir,
                 )
             else:
