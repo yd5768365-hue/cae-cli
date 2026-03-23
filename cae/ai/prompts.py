@@ -7,6 +7,7 @@ Prompt 模板库
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -116,6 +117,7 @@ DIAGNOSE_SYSTEM = """你是一位资深的有限元分析（FEA）工程师，�
 def make_diagnose_prompt(
     rule_issues: list[dict],
     stderr_summary: str,
+    similar_cases: Optional[list[dict]] = None,
 ) -> str:
     """生成诊断的 prompt。"""
     issues_text = "\n".join(
@@ -123,10 +125,24 @@ def make_diagnose_prompt(
         for i in rule_issues
     ) if rule_issues else "无明显规则违规。"
 
+    # 相似案例信息
+    cases_text = ""
+    if similar_cases:
+        cases_text = "\n\n### 相似参考案例\n"
+        for case in similar_cases[:3]:
+            cases_text += f"""- **{case['name']}** (相似度: {case['similarity_score']}%)
+  - 单元类型: {case['element_type']}, 问题类型: {case['problem_type']}, 边界: {case['boundary_type']}
+  - 预期位移范围: {case.get('expected_disp_max', 'N/A')}
+  - 预期应力范围: {case.get('expected_stress_max', 'N/A')}
+"""
+    else:
+        cases_text = "\n\n### 相似参考案例\n（无可用参考案例）"
+
     return f"""## 诊断摘要
 
 ### 规则检测结果
 {issues_text}
+{cases_text}
 
 ### 求解器输出摘要（最后50行）
 ```

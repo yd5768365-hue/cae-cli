@@ -1,35 +1,47 @@
 # diagnose.py
 """
-规则检测 + AI 诊断
+三层次诊断系统
 
-规则检测（无需 AI）：
+Level 1: 规则检测（无条件执行）
   - 收敛性：stderr 含 *ERROR 或 returncode != 0
-  - 网格质量：单元 Jacobian < 0
-  - 网格质量：长宽比 > 10
-  - 应力集中：应力梯度突变 > 5x
+  - 网格质量：节点/单元比例异常
+  - 应力集中：应力梯度突变 > 50x
   - 位移范围：最大位移 > 模型尺寸 10%
 
-AI 诊断：在规则检测基础上调用 LLM 进行深度分析。
+Level 2: 参考案例对比（无条件执行）
+  - 从 638 个官方测试集找相似案例
+  - 对比用户结果的位移/应力是否在同类案例合理范围内
+
+Level 3: AI 深度分析（可选，需安装 ai 插件）
+  - 结合规则检测 + 参考案例对比结果
+  - 给出具体的修复建议
 """
 from __future__ import annotations
 
-import re
+import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from .llm_client import LLMClient
 from .prompts import DIAGNOSE_SYSTEM, make_diagnose_prompt
 from .stream_handler import StreamHandler
 from .explain import _find_frd, _extract_stats
+from .reference_cases import CaseMetadata, CaseDatabase, parse_inp_metadata, ClassificationTree
 from cae.viewer.frd_parser import parse_frd
+
+log = logging.getLogger(__name__)
+
+# 参考案例库路径
+REFERENCE_CASES_PATH = Path(__file__).parent / "data" / "reference_cases.json"
 
 
 @dataclass
 class DiagnosticIssue:
     """诊断问题条目。"""
     severity: str  # "error" | "warning" | "info"
-    category: str  # "convergence" | "mesh_quality" | "stress_concentration" | "displacement"
+    category: str  # "convergence" | "mesh_quality" | "stress_concentration" | "displacement" | "reference_comparison"
     message: str
     location: Optional[str] = None
     suggestion: Optional[str] = None
@@ -39,76 +51,79 @@ class DiagnosticIssue:
 class DiagnoseResult:
     """诊断结果。"""
     success: bool
-    issues: list[DiagnosticIssue] = field(default_factory=list)
-    issue_count: int = 0
-    ai_diagnosis: Optional[str] = None
+    level1_issues: list[DiagnosticIssue] = field(default_factory=list)  # 规则检测
+    level2_issues: list[DiagnosticIssue] = field(default_factory=list)  # 参考案例对比
+    level3_diagnosis: Optional[str] = None  # AI 诊断
+    similar_cases: list[dict] = field(default_factory=list)  # 相似案例
     error: Optional[str] = None
+
+    @property
+    def issues(self) -> list[DiagnosticIssue]:
+        """所有问题的合并列表。"""
+        return self.level1_issues + self.level2_issues
+
+    @property
+    def issue_count(self) -> int:
+        return len(self.issues)
 
 
 def diagnose_results(
     results_dir: Path,
-    client: Optional[LLMClient],
+    client: Optional[LLMClient] = None,
+    inp_file: Optional[Path] = None,
     *,
     stream: bool = True,
 ) -> DiagnoseResult:
     """
-    对结果目录进行规则检测，可选进行 AI 深度诊断。
+    三层次诊断。
 
     Args:
         results_dir: 包含 .frd / .sta / .dat 文件的目录
-        client: LLM 客户端（可选，为 None 时只做规则检测）
+        client: LLM 客户端（可选，不传或为 None 时跳过 Level 3）
+        inp_file: 输入的 .inp 文件路径（用于提取元数据进行案例匹配）
         stream: 是否流式输出
 
     Returns:
         DiagnoseResult
     """
+    result = DiagnoseResult(success=True)
+
     try:
-        issues: list[DiagnosticIssue] = []
+        # ========== Level 1: 规则检测（无条件执行）==========
+        result.level1_issues.extend(_check_convergence(results_dir))
+        result.level1_issues.extend(_check_frd_quality(results_dir))
+        result.level1_issues.extend(_check_stress_gradient(results_dir))
+        result.level1_issues.extend(_check_displacement_range(results_dir))
 
-        # 1. 规则检测
-        issues.extend(_check_convergence(results_dir))
-        issues.extend(_check_frd_quality(results_dir))
-        issues.extend(_check_stress_gradient(results_dir))
-        issues.extend(_check_displacement_range(results_dir))
+        # ========== Level 2: 参考案例对比（无条件执行）==========
+        ref_result = _check_reference_cases(results_dir, inp_file)
+        result.level2_issues = ref_result["issues"]
+        result.similar_cases = ref_result["similar_cases"]
 
-        # 2. AI 诊断（可选）
-        ai_diagnosis: Optional[str] = None
-        if client and issues:
-            stderr_summary = _get_stderr_summary(results_dir)
-            issue_dicts = [
-                {
-                    "severity": i.severity,
-                    "category": i.category,
-                    "message": i.message,
-                    "location": i.location,
-                    "suggestion": i.suggestion,
-                }
-                for i in issues
-            ]
-            prompt_text = make_diagnose_prompt(issue_dicts, stderr_summary)
-
-            if stream:
-                handler = StreamHandler()
-                tokens = client.complete_streaming(prompt_text)
-                ai_diagnosis = handler.stream_tokens(tokens)
-            else:
-                ai_diagnosis = client.complete(prompt_text)
-
-        return DiagnoseResult(
-            success=True,
-            issues=issues,
-            issue_count=len(issues),
-            ai_diagnosis=ai_diagnosis,
-        )
+        # ========== Level 3: AI 深度分析（可选）==========
+        if client is not None:
+            result.level3_diagnosis = _run_ai_diagnosis(
+                client,
+                result.level1_issues,
+                result.level2_issues,
+                result.similar_cases,
+                results_dir,
+                stream=stream,
+            )
 
     except FileNotFoundError as exc:
-        return DiagnoseResult(success=False, error=str(exc))
+        result.success = False
+        result.error = str(exc)
     except Exception as exc:
-        return DiagnoseResult(success=False, error=f"诊断失败: {exc}")
+        result.success = False
+        result.error = f"诊断失败: {exc}"
+        log.exception("诊断过程出错")
+
+    return result
 
 
 # ------------------------------------------------------------------ #
-# 规则检测函数
+# Level 1: 规则检测函数
 # ------------------------------------------------------------------ #
 
 def _check_convergence(results_dir: Path) -> list[DiagnosticIssue]:
@@ -116,8 +131,7 @@ def _check_convergence(results_dir: Path) -> list[DiagnosticIssue]:
     issues: list[DiagnosticIssue] = []
 
     # 检查 .sta 文件
-    sta_files = sorted(results_dir.glob("*.sta"))
-    for sta in sta_files:
+    for sta in results_dir.glob("*.sta"):
         try:
             text = sta.read_text(encoding="utf-8", errors="replace")
             if "*ERROR" in text or "error" in text.lower():
@@ -132,11 +146,9 @@ def _check_convergence(results_dir: Path) -> list[DiagnosticIssue]:
             pass
 
     # 检查 .cvg 文件
-    cvg_files = sorted(results_dir.glob("*.cvg"))
-    for cvg in cvg_files:
+    for cvg in results_dir.glob("*.cvg"):
         try:
             text = cvg.read_text(encoding="utf-8", errors="replace")
-            # 检查是否未收敛
             if "NOT" in text and "CONVERGED" in text:
                 issues.append(DiagnosticIssue(
                     severity="error",
@@ -162,10 +174,8 @@ def _check_frd_quality(results_dir: Path) -> list[DiagnosticIssue]:
     try:
         frd_data = parse_frd(frd_file)
 
-        # 检查节点/单元数比例
         if frd_data.node_count > 0 and frd_data.element_count > 0:
             ratio = frd_data.node_count / frd_data.element_count
-            # 正常六面体网格比例约 1:8 到 1:27
             if ratio < 0.5:
                 issues.append(DiagnosticIssue(
                     severity="warning",
@@ -184,13 +194,11 @@ def _check_frd_quality(results_dir: Path) -> list[DiagnosticIssue]:
         # 检查位移异常
         disp_result = frd_data.get_result("DISP")
         if disp_result and disp_result.values:
-            # 提取所有位移值
-            all_disp_vals = []
-            for vals in disp_result.values:
-                if vals:
-                    disp_mag = sum(v ** 2 for v in vals) ** 0.5 if len(vals) >= 3 else abs(vals[0])
-                    all_disp_vals.append(disp_mag)
-
+            all_disp_vals = [
+                (sum(v ** 2 for v in vals) ** 0.5 if len(vals) >= 3 else abs(vals[0]))
+                for vals in disp_result.values.values()
+                if vals
+            ]
             if all_disp_vals:
                 max_disp = max(all_disp_vals)
                 mean_disp = sum(all_disp_vals) / len(all_disp_vals)
@@ -203,13 +211,13 @@ def _check_frd_quality(results_dir: Path) -> list[DiagnosticIssue]:
                     ))
 
     except Exception:
-        pass  # 解析失败不影响其他检测
+        pass
 
     return issues
 
 
 def _check_stress_gradient(results_dir: Path) -> list[DiagnosticIssue]:
-    """检查应力集中：应力梯度突变 > 5x。"""
+    """检查应力集中：应力梯度突变 > 50x。"""
     issues: list[DiagnosticIssue] = []
 
     frd_file = _find_frd(results_dir)
@@ -221,18 +229,16 @@ def _check_stress_gradient(results_dir: Path) -> list[DiagnosticIssue]:
         stress_result = frd_data.get_result("STRESS")
 
         if stress_result and stress_result.values and len(stress_result.values) > 10:
-            # 提取 von Mises 或等效应力
             stress_vals = []
-            for vals in stress_result.values:
+            for vals in stress_result.values.values():
                 if len(vals) >= 4:
-                    stress_vals.append(abs(vals[3]))  # 第4个分量
+                    stress_vals.append(abs(vals[3]))
                 elif vals:
                     stress_vals.append(abs(max(vals, key=abs)))
 
             if stress_vals:
                 sorted_vals = sorted(stress_vals)
-                # 检查最大/最小比值
-                min_stress = sorted_vals[len(sorted_vals) // 10]  # 10th percentile
+                min_stress = sorted_vals[len(sorted_vals) // 10]
                 max_stress = sorted_vals[-1]
 
                 if min_stress > 0 and max_stress / min_stress > 50:
@@ -279,16 +285,189 @@ def _check_displacement_range(results_dir: Path) -> list[DiagnosticIssue]:
     return issues
 
 
-def _get_stderr_summary(results_dir: Path) -> str:
-    """收集所有 .sta / .dat 文件内容作为摘要。
+# ------------------------------------------------------------------ #
+# Level 2: 参考案例对比
+# ------------------------------------------------------------------ #
 
-    收集策略：
-    1. 最后 50 行（反映求解结束状态）
-    2. 关键词匹配行（反映早期警告/错误）
+def _check_reference_cases(
+    results_dir: Path,
+    inp_file: Optional[Path] = None,
+) -> dict:
     """
+    与参考案例库对比，检查结果是否在合理范围内。
+
+    Returns:
+        {
+            "issues": list[DiagnosticIssue],
+            "similar_cases": list[dict],  # 相似案例信息
+        }
+    """
+    issues: list[DiagnosticIssue] = []
+    similar_cases: list[dict] = []
+
+    # 加载参考案例库
+    if not REFERENCE_CASES_PATH.exists():
+        log.warning("参考案例库不存在: %s", REFERENCE_CASES_PATH)
+        return {"issues": issues, "similar_cases": similar_cases}
+
+    try:
+        db = CaseDatabase.from_json(REFERENCE_CASES_PATH)
+    except Exception as e:
+        log.warning("参考案例库加载失败: %s", e)
+        return {"issues": issues, "similar_cases": similar_cases}
+
+    # 如果提供了 INP 文件，提取元数据并查找相似案例
+    if inp_file and inp_file.exists():
+        try:
+            user_meta = parse_inp_metadata(inp_file)
+
+            # 两阶段检索
+            similar = db.find_similar(user_meta, top_n=3)
+
+            for ref_case, score in similar:
+                case_info = {
+                    "name": ref_case.name,
+                    "element_type": ref_case.element_type,
+                    "problem_type": ref_case.problem_type,
+                    "boundary_type": ref_case.boundary_type,
+                    "similarity_score": round(score * 100, 1),
+                    "expected_disp_max": ref_case.expected_disp_max,
+                    "expected_stress_max": ref_case.expected_stress_max,
+                }
+                similar_cases.append(case_info)
+
+            # 与相似案例对比结果
+            issues.extend(_compare_with_reference(results_dir, similar))
+
+        except Exception as e:
+            log.warning("参考案例对比失败: %s", e)
+
+    return {"issues": issues, "similar_cases": similar_cases}
+
+
+def _compare_with_reference(
+    results_dir: Path,
+    similar_cases: list[tuple[CaseMetadata, float]],
+) -> list[DiagnosticIssue]:
+    """将用户结果与相似案例的预期范围对比。"""
+    issues: list[DiagnosticIssue] = []
+
+    frd_file = _find_frd(results_dir)
+    if not frd_file:
+        return issues
+
+    try:
+        frd_data = parse_frd(frd_file)
+        stats = _extract_stats(frd_data)
+        user_disp_max = stats["max_displacement"]
+        user_stress_max = _get_max_stress(frd_data)
+
+        for ref_case, score in similar_cases:
+            # 对比位移
+            if ref_case.expected_disp_max and ref_case.expected_disp_max > 0:
+                ratio = user_disp_max / ref_case.expected_disp_max
+                if ratio > 10:
+                    issues.append(DiagnosticIssue(
+                        severity="warning",
+                        category="reference_comparison",
+                        message=f"最大位移是同类参考案例的 {ratio:.1f}x（案例: {ref_case.name}）",
+                        location=f"案例相似度: {score*100:.0f}%",
+                        suggestion="检查边界条件是否与参考案例一致，或载荷是否过大",
+                    ))
+                    break
+                elif ratio < 0.1 and ratio > 0:
+                    issues.append(DiagnosticIssue(
+                        severity="info",
+                        category="reference_comparison",
+                        message=f"最大位移是同类参考案例的 {ratio:.1f}x（案例: {ref_case.name}），可能刚度过高",
+                        location=f"案例相似度: {score*100:.0f}%",
+                        suggestion="结果偏小，可能需要检查载荷是否正确施加",
+                    ))
+
+            # 对比应力
+            if ref_case.expected_stress_max and ref_case.expected_stress_max > 0 and user_stress_max > 0:
+                stress_ratio = user_stress_max / ref_case.expected_stress_max
+                if stress_ratio > 10:
+                    issues.append(DiagnosticIssue(
+                        severity="warning",
+                        category="reference_comparison",
+                        message=f"最大应力是同类参考案例的 {stress_ratio:.1f}x（案例: {ref_case.name}）",
+                        location=f"案例相似度: {score*100:.0f}%",
+                        suggestion="检查材料参数是否正确，或是否存在应力集中",
+                    ))
+                    break
+
+    except Exception as e:
+        log.warning("对比参考案例时出错: %s", e)
+
+    return issues
+
+
+def _get_max_stress(frd_data) -> float:
+    """从 FrdData 获取最大应力。"""
+    stress_result = frd_data.get_result("STRESS")
+    if not stress_result or not stress_result.values:
+        return 0.0
+
+    max_stress = 0.0
+    for vals in stress_result.values.values():
+        if len(vals) >= 4:
+            # 取 von Mises（假设第4个分量是等效应力）
+            max_stress = max(max_stress, abs(vals[3]))
+        elif vals:
+            max_stress = max(max_stress, max(abs(v) for v in vals))
+    return max_stress
+
+
+# ------------------------------------------------------------------ #
+# Level 3: AI 诊断
+# ------------------------------------------------------------------ #
+
+def _run_ai_diagnosis(
+    client: LLMClient,
+    level1_issues: list[DiagnosticIssue],
+    level2_issues: list[DiagnosticIssue],
+    similar_cases: list[dict],
+    results_dir: Path,
+    stream: bool = True,
+) -> Optional[str]:
+    """运行 AI 深度诊断。"""
+    try:
+        stderr_summary = _get_stderr_summary(results_dir)
+
+        all_issues = level1_issues + level2_issues
+        if not all_issues:
+            return None
+
+        issue_dicts = [
+            {
+                "severity": i.severity,
+                "category": i.category,
+                "message": i.message,
+                "location": i.location,
+                "suggestion": i.suggestion,
+            }
+            for i in all_issues
+        ]
+
+        prompt_text = make_diagnose_prompt(issue_dicts, stderr_summary, similar_cases)
+
+        if stream:
+            handler = StreamHandler()
+            tokens = client.complete_streaming(prompt_text)
+            return handler.stream_tokens(tokens)
+        else:
+            return client.complete(prompt_text)
+
+    except Exception as e:
+        log.warning("AI 诊断失败: %s", e)
+        return None
+
+
+def _get_stderr_summary(results_dir: Path) -> str:
+    """收集所有 .sta / .dat / .cvg 文件内容作为摘要。"""
     summaries: list[str] = []
 
-    # 关键词列表：反映问题或迭代状态
     keyword_patterns = (
         "error", "ERROR", "warning", "WARNING",
         "not converge", "NOT CONVERGED", "converged",
@@ -305,20 +484,14 @@ def _get_stderr_summary(results_dir: Path) -> str:
                 text = f.read_text(encoding="utf-8", errors="replace")
                 lines = text.strip().splitlines()
 
-                # 1. 最后 50 行
                 last_lines = lines[-50:] if len(lines) > 50 else lines
-
-                # 2. 关键词匹配行（不限位置，捕捉早期警告）
                 keyword_lines = [
                     line for line in lines
                     if any(kw in line for kw in keyword_patterns)
-                ]
-                # 限制关键词行数量避免过长
-                keyword_lines = keyword_lines[-30:] if len(keyword_lines) > 30 else keyword_lines
+                ][-30:]
 
-                # 去重合并
                 seen = set()
-                combined: list[str] = []
+                combined = []
                 for line in last_lines:
                     if line not in seen:
                         seen.add(line)

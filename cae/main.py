@@ -2136,7 +2136,8 @@ def suggest(
 @app.command()
 def diagnose(
     results_dir: Optional[Path] = typer.Argument(None, help="结果目录"),
-    no_ai: bool = typer.Option(False, "--no-ai", help="只做规则检测，跳过 AI"),
+    inp_file: Optional[Path] = typer.Option(None, "-i", "--inp", help="INP 文件（用于参考案例匹配）"),
+    no_ai: bool = typer.Option(False, "--no-ai", help="只做规则+案例检测，跳过 AI"),
     stream: bool = typer.Option(True, "--stream/--no-stream"),
 ) -> None:
     """[bold]AI 诊断仿真问题[/bold]"""
@@ -2155,10 +2156,10 @@ def diagnose(
     if not no_ai:
         client = LLMClient()
         if not client.is_running():
-            console.print("  llama-server 未运行，仅执行规则检测\n")
+            console.print("  llama-server 未运行，仅执行规则+案例检测\n")
             client = None
 
-    result = diagnose_results(results_dir, client, stream=stream)
+    result = diagnose_results(results_dir, client, inp_file=inp_file, stream=stream)
 
     if not result.success:
         err_console.print(f"\n  {result.error}\n")
@@ -2176,8 +2177,17 @@ def diagnose(
     else:
         console.print("  规则检测未发现明显问题\n")
 
-    if result.ai_diagnosis and not stream:
-        console.print(Panel(result.ai_diagnosis, title="AI 诊断", border_style="yellow"))
+    # 显示相似案例
+    if result.similar_cases:
+        console.print(f"  参考案例匹配：找到 {len(result.similar_cases)} 个相似案例")
+        for case in result.similar_cases[:3]:
+            console.print(f"  - {case['name']} (相似度 {case['similarity_score']}%)")
+            if case.get('expected_disp_max'):
+                console.print(f"    预期位移: {case['expected_disp_max']:.3e}")
+        console.print()
+
+    if result.level3_diagnosis and not stream:
+        console.print(Panel(result.level3_diagnosis, title="AI 诊断", border_style="yellow"))
 
     console.print()
 
