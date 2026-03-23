@@ -1694,8 +1694,9 @@ def view(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        server.shutdown()
-        console.print("\n  服务已停止\n")
+        pass
+    server.server_close()
+    console.print("\n  服务已停止\n")
 
 
 @app.command()
