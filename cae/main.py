@@ -948,26 +948,88 @@ def solve(
     console.print(f"  输出目录:   [cyan]{output}[/cyan]")
     console.print()
 
-    # ---- 执行求解（带进度条）----
-    result = None
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
-        task = progress.add_task("  [bold yellow]求解中...[/bold yellow]", total=None)
-        result = solver_instance.solve(
-            inp_file.resolve(),
-            output.resolve(),
-            timeout=timeout,
-        )
-        progress.update(task, completed=True)
+    # ---- 执行求解（带重试循环）----
+    while True:
+        result = None
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("  [bold yellow]求解中...[/bold yellow]", total=None)
+            result = solver_instance.solve(
+                inp_file.resolve(),
+                output.resolve(),
+                timeout=timeout,
+            )
+            progress.update(task, completed=True)
 
-    # ---- 显示结果 ----
-    console.print()
-    _print_solve_result(result, inp_file)
+        # ---- 显示结果 ----
+        console.print()
+        _print_solve_result(result, inp_file)
+
+        # 成功则退出，失败则询问是否重试
+        if result.success:
+            break
+
+        console.print()
+        retry = typer.prompt(
+            "  求解失败，是否重新输入求解器路径？",
+            default="y",
+            show_default=True,
+        )
+        if retry.lower() != "y":
+            break
+
+        # 清除缓存并重新输入路径
+        if hasattr(solver_instance, '_find_binary'):
+            solver_instance._find_binary.cache_clear()
+
+        err_console.print("  [yellow]请指定 CalculiX 路径[/yellow]")
+        err_console.print()
+
+        possible_paths = [
+            str(Path.home() / ".cae-cli" / "solvers" / "calculix" / "bin" / "ccx.exe"),
+            str(Path.home() / ".cae-cli" / "solvers" / "calculix" / "bin"),
+            "C:\\CalculiX\\bin\\ccx.exe",
+        ]
+
+        default_path = possible_paths[0]
+        for p in possible_paths:
+            if Path(p).exists() or Path(p).parent.exists():
+                default_path = p
+                break
+
+        raw_path = typer.prompt(
+            "  求解器路径 (ccx.exe)",
+            default=default_path,
+            show_default=True,
+        )
+        new_solver_path = Path(raw_path.strip())
+
+        if new_solver_path.is_dir():
+            for ccx_name in ["ccx.exe", "ccx"]:
+                ccx_in_dir = new_solver_path / ccx_name
+                if ccx_in_dir.is_file():
+                    new_solver_path = ccx_in_dir
+                    break
+
+        settings.solver_path = str(new_solver_path.resolve())
+        solver_instance._find_binary.cache_clear()
+
+        # 更新显示的路径
+        binary = solver_instance._find_binary()
+        if binary:
+            version = solver_instance.get_version()
+            console.print(f"  使用求解器: [green]{solver}[/green]"
+                          + (f"  [dim]({version})[/dim]" if version else ""))
+            console.print(f"  求解器路径: [cyan]{binary}[/cyan]")
+            console.print(f"  输入文件:   [cyan]{inp_file}[/cyan]")
+            console.print(f"  输出目录:   [cyan]{output}[/cyan]")
+            console.print()
+
 
 
 def _print_solve_result(result, inp_file: Path) -> None:
