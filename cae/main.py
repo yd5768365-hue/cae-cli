@@ -826,6 +826,12 @@ def solve(
         "--timeout",
         help="求解超时秒数",
     ),
+    solver_path: Optional[Path] = typer.Option(
+        None,
+        "--solver-path",
+        help="求解器路径（覆盖已保存的路径）",
+        show_default=False,
+    ),
 ) -> None:
     """
     [bold]执行 FEA 仿真求解[/bold]
@@ -878,10 +884,11 @@ def solve(
     # ---- 检查/设置求解器路径 ----
     binary = solver_instance._find_binary() if hasattr(solver_instance, '_find_binary') else None
 
-    if binary is None:
-        # 询问用户求解器路径
-        err_console.print("  [yellow]未找到求解器，请指定 CalculiX 路径[/yellow]")
-        err_console.print()
+    if binary is None or solver_path is not None:
+        # 如果传入了 --solver-path，或者未找到求解器，提示用户输入
+        if binary is None:
+            err_console.print("  [yellow]未找到求解器，请指定 CalculiX 路径[/yellow]")
+            err_console.print()
 
         # 尝试查找可能的路径
         possible_paths = [
@@ -896,27 +903,30 @@ def solve(
                 default_path = p
                 break
 
-        raw_path = typer.prompt(
-            "  求解器路径 (ccx.exe)",
-            default=default_path,
-            show_default=True,
-        )
-        solver_path = Path(raw_path.strip())
+        # 如果用户通过参数指定了路径，使用它；否则提示输入
+        if solver_path is not None:
+            user_provided_path = solver_path
+        else:
+            raw_path = typer.prompt(
+                "  求解器路径 (ccx.exe)",
+                default=default_path,
+                show_default=True,
+            )
+            user_provided_path = Path(raw_path.strip())
 
         # 如果用户输入的是目录，取其中的 ccx.exe
-        if solver_path.is_dir():
+        if user_provided_path.is_dir():
             for ccx_name in ["ccx.exe", "ccx"]:
-                ccx_in_dir = solver_path / ccx_name
+                ccx_in_dir = user_provided_path / ccx_name
                 if ccx_in_dir.is_file():
-                    solver_path = ccx_in_dir
+                    user_provided_path = ccx_in_dir
                     break
 
         # 保存路径到配置
-        settings.solver_path = str(solver_path.resolve())
+        settings.solver_path = str(user_provided_path.resolve())
 
         # 清除求解器缓存
         if hasattr(solver_instance, '_find_binary'):
-            # 清除 _find_binary 的缓存
             solver_instance._find_binary.cache_clear()
 
         # 重新查找
