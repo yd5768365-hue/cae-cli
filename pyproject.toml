@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cae-cxx"
-version = "1.2.4"
+version = "1.2.5"
 description = "轻量化 CAE 命令行工具 — 一条命令跑仿真，一个链接看结果"
 readme = "README.md"
 license = { text = "MIT" }
