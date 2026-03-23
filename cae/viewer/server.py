@@ -71,7 +71,8 @@ class ViewServer:
 
         Handler._server = self  # type: ignore
 
-        self._server = socketserver.TCPServer(("", self.port), Handler)
+        # 使用 ThreadingTCPServer 以便 Ctrl+C 能立即中断
+        self._server = socketserver.ThreadingTCPServer(("", self.port), Handler)
         log.info(f"Server started at {self.url}")
         self._server.serve_forever()
 
