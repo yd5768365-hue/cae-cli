@@ -1,6 +1,6 @@
 # cae-cli
 
-> **工程师的本地 AI 助手 + 快速验证工具** — 一条命令跑仿真，AI 帮你诊断问题
+> **买不起商业软件的机械工程学生和小型实验室** — 用 CalculiX 做仿真，AI 帮你诊断问题
 
 <p align="center">
 
@@ -9,7 +9,6 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Test](https://img.shields.io/badge/Tests-100%20passed-brightgreen.svg)](#兼容性验证)
 [![CalculiX](https://img.shields.io/badge/CalculiX-2.22+-orange.svg)](https://www.calculix.org/)
-[![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/yd5768365-hue/cae-cli)
 
 </p>
 
@@ -50,7 +49,7 @@ $ cae diagnose results/
 | Level 2 | 638 个官方测试集物理数据 | ✅ 基于真实求解 |
 | Level 3 | LLM 推理（可选） | ⚠️ 需 Prompt 约束 |
 
-规则层建议**直接来自 CalculiX 源码**：
+规则层建议**直接来自 CalculiX 源码**，通过 `grep -r "\*ERROR\|WARNING" src/*.f` 提取：
 ```fortran
 ! CalculiX/src/calinput.f
 WRITE(*,*) '*ERROR in calinput: no elastic constants'
@@ -467,6 +466,9 @@ print(model.to_inp())
 
 **Q: 需要 GPU 吗？**
 > 不需要。CalculiX 求解器和 AI 模型都支持 CPU 运行。AI 模型约 5 GB（Q4 量化），在普通笔记本上即可运行。
+
+**Q: 和 FreeCAD FEM 有什么区别？**
+> FreeCAD FEM 是 GUI 界面，适合鼠标操作。本项目是**命令行工具**，适合：1) 批量处理多个模型；2) 自动化流程集成；3) AI 辅助诊断（规则层直接解析错误输出，给出修复建议）。如果你习惯鼠标操作，FreeCAD 更直观；如果你需要自动化或快速调试，cae-cli 更高效。
 
 ---
 
