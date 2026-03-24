@@ -112,11 +112,12 @@ def _extract_stats(frd_data: FrdData) -> dict:
     max_disp = 0.0
     max_disp_node = 0
     if disp_result and disp_result.values:
-        all_disps = [
-            (i, sum(v[i] ** 2 for v in disp_result.values) ** 0.5
-             if len(v) >= 3 else abs(v[0] if v else 0))
-            for i, node_id in enumerate(disp_result.node_ids)
-        ]
+        all_disps = []
+        for node_id in disp_result.node_ids:
+            vals = disp_result.values.get(node_id)
+            if vals is not None and len(vals) >= 3:
+                magnitude = sum(float(vals[j]) ** 2 for j in range(3)) ** 0.5
+                all_disps.append((node_id, magnitude))
         if all_disps:
             max_disp_node, max_disp = max(all_disps, key=lambda x: x[1])
 
@@ -127,13 +128,13 @@ def _extract_stats(frd_data: FrdData) -> dict:
     stress_component = "von Mises"
     if stress_result and stress_result.values:
         # 假设第4个分量是 von Mises（根据 CalculiX 输出格式）
-        for i, vals in enumerate(stress_result.values):
+        for elem_id, vals in stress_result.values.items():
             # 计算 von Mises 等效应力
-            if len(vals) >= 4:
-                vm = vals[3] if len(vals) > 3 else max(abs(v) for v in vals)
-                if abs(vm) > abs(max_stress):
-                    max_stress = abs(vm)
-                    max_stress_elem = stress_result.node_ids[i]
+            if vals is not None and len(vals) >= 4:
+                vm = abs(float(vals[3]))
+                if vm > max_stress:
+                    max_stress = vm
+                    max_stress_elem = elem_id
 
     # 模型边界（用于计算尺寸）
     model_bounds = (1.0, 1.0, 1.0)  # 默认

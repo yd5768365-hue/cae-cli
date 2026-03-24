@@ -17,16 +17,90 @@
 
 ---
 
+## AI 诊断系统
+
+> **不用猜，规则层直接告诉你哪里错了**
+
+求解失败后，`cae diagnose` 能准确定位问题根因，并给出**可直接复制粘贴的修复命令**。
+
+```bash
+$ cae solve contact.inp
+╭───────────────────────╮
+║  求解失败  耗时 0.1s   ║
+╰───────────────────────╯
+
+$ cae diagnose results/
+规则检测：发现 2 个问题
+[X] [material] 材料缺少弹性常数
+    -> 在 *MATERIAL 中添加 *ELASTIC 或 *ELASTIC,TYPE=ISOTROPIC
+
+[X] [convergence] 增量步小于最小值
+    -> 减小初始步长（*STATIC 首参数）
+```
+
+### 核心优势：基于源码硬编码，0 幻觉
+
+传统 AI 诊断依赖 LLM 理解错误信息，容易产生**幻觉建议**（如把 Abaqus 语法当作 CalculiX）。
+
+本项目采用**规则层优先**策略：
+
+| 层级 | 数据来源 | 可靠性 |
+|------|----------|--------|
+| **Level 1** | 527 个 CalculiX 源码硬编码错误模式 | ✅ 100% 准确 |
+| Level 2 | 638 个官方测试集物理数据 | ✅ 基于真实求解 |
+| Level 3 | LLM 推理（可选） | ⚠️ 需 Prompt 约束 |
+
+规则层建议**直接来自 CalculiX 源码**：
+```fortran
+! CalculiX/src/calinput.f
+WRITE(*,*) '*ERROR in calinput: no elastic constants'
+```
+解析为：
+```python
+{"pattern": "no elastic constants", "suggestion": "在 *MATERIAL 中添加 *ELASTIC"}
+```
+
+### 三层诊断架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Level 1: 规则检测（无条件，0 LLM 调用）                    │
+│  527 个源码硬编码模式，覆盖：                               │
+│  - 材料缺失：no elastic / no density / no material          │
+│  - 输入语法：card cannot be interpreted / parameter error   │
+│  - 收敛性：not converged / divergence / increment stalled   │
+│  - 单元质量：negative jacobian / hourglassing               │
+├─────────────────────────────────────────────────────────────┤
+│  Level 2: 参考案例对比                                       │
+│  638 个官方测试集，物理数据相似度匹配                       │
+│  判断当前位移/应力是否在合理范围内                          │
+├─────────────────────────────────────────────────────────────┤
+│  Level 3: AI 深度分析（可选）                               │
+│  Prompt 内置约束：禁止 Abaqus 语法                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 与 Ansys Copilot 的差异
+
+| 维度 | Ansys Copilot | CAE-CLI |
+|------|---------------|---------|
+| 知识来源 | 文档 + 问答 | **源码硬编码** + 真实求解记录 |
+| 准确性 | 可能幻觉 | **0 幻觉**（规则层） |
+| 覆盖范围 | 通用 CAE | **CalculiX 特定** |
+
+CalculiX 文档零散、不完整，但**真实错误输出是确定的**。本项目直接解析 solver 输出，匹配源码中的硬编码错误，准确性高于基于文档的 AI 方案。
+
+---
+
 ## 目录
 
-- [新增功能](#新增功能)
+- [AI 诊断系统](#ai-诊断系统) ← 重点
 - [快速开始](#快速开始)
+- [新增功能](#新增功能)
 - [核心能力](#核心能力)
 - [安装](#安装)
 - [命令速查](#命令速查)
-- [内置模板](#内置模板)
 - [Python API](#python-api)
-- [AI 模型](#ai-模型)
 - [FAQ](#faq)
 - [项目结构](#项目结构)
 - [开发](#开发)
@@ -38,9 +112,18 @@
 ### v1.3.1 (2026-03)
 
 **三层次诊断系统**：
-- Level 1（规则检测）：收敛性、网格质量、应力集中、位移范围
-- Level 2（参考案例对比）：638 个 CalculiX 官方测试集案例匹配
-- Level 3（AI 深度分析）：可选，需要 `pip install cae-cxx[ai]`
+- **Level 1（规则检测）**：基于 527 个 CalculiX 源码硬编码错误/警告模式，无条件执行
+  - 收敛性：`not converged`, `increment size smaller`, `divergence`
+  - 材料缺失：`no elastic constants`, `no density`, `no material`
+  - 输入语法：`card image cannot be interpreted`, `parameter not recognized`
+  - 单元质量：`negative/nonpositive jacobian`, `hourglassing`
+  - 步长停滞：连续5个增量 INC TIME 不增大
+- **Level 2（参考案例对比）**：638 个 CalculiX 官方测试集案例匹配
+- **Level 3（AI 深度分析）**：可选，基于规则检测结果 + 物理数据 + 相似案例
+
+**架构优势**：
+- 规则层基于**真实 solver 输出**（源码硬编码），而非文档描述，无幻觉
+- Prompt 内置 CalculiX 语法约束，禁止 Abaqus 专有卡片
 
 **AI 可选插件**：
 - `cae install` — 只安装 CalculiX 求解器
@@ -90,23 +173,30 @@ cae solve beam.inp
 cae diagnose results/
 ```
 
-**输出示例：**
+**诊断输出示例：**
 
 ```
-$ cae solve beam.inp
+$ cae solve contact.inp
 ╭───────────────────────╮
-║  求解完成！  0.1s   ║
+║  求解失败  耗时 0.1s   ║
 ╰───────────────────────╯
 
 $ cae diagnose results/
-规则检测：发现 1 个问题
-[!] [mesh_quality] 节点/单元比例过低 (0.26)
-  -> 检查网格划分参数
+规则检测：发现 2 个问题
+[X] [material] 材料缺少弹性常数（Elastic modulus）
+    -> 在 *MATERIAL 中添加 *ELASTIC 或 *ELASTIC,TYPE=ISOTROPIC 定义弹性模量
+[X] [input_syntax] 检测到无效 INP 关键词
+    -> 检查卡片拼写，确保与 CalculiX 支持的关键词一致
 
 参考案例匹配：找到 3 个相似案例
-- beam1t (相似度 95.2%)
-  预期位移: 1.234e-01
+- contact_mortar (相似度 87.3%)
+  预期位移: 1.234e-03
+  预期应力: 45.2 MPa
 ```
+
+**诊断说明：**
+- Level 1 规则检测**无需 AI**，基于 527 个 CalculiX 源码硬编码模式，0 幻觉
+- Level 3 AI 分析需要 `pip install cae-cxx[ai]`，用于复杂场景深度解读
 
 浏览器自动打开 ParaView Glance 显示位移 / 应力云图
 
@@ -156,9 +246,32 @@ $ cae diagnose results/
 | 📄 PDF 报告 | `cae report results/` | 最大位移/应力/安全系数/云图，一键发给导师 |
 
 **诊断三层架构：**
-- Level 1 — 规则检测（无条件）：收敛性、网格质量、应力集中、位移范围
-- Level 2 — 参考案例对比（无条件）：638 个 CalculiX 官方测试集匹配
-- Level 3 — AI 深度分析（可选）：需要 `pip install cae-cxx[ai]`
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Level 1: 规则检测（无条件执行，0 LLM 调用）           │
+│  ├── 527 个 CalculiX 源码硬编码模式                    │
+│  ├── 收敛性 / 材料缺失 / 输入语法 / 单元质量 / 步长停滞  │
+├─────────────────────────────────────────────────────────┤
+│  Level 2: 参考案例对比（638 个真实求解记录）            │
+│  └── 物理数据相似度匹配                                │
+├─────────────────────────────────────────────────────────┤
+│  Level 3: AI 深度分析（可选，LLM 调用）                │
+│  └── 基于规则检测结果 + 物理数据 + 相似案例            │
+└─────────────────────────────────────────────────────────┘
+```
+
+**规则层检测规则（Level 1）：**
+
+| 规则 | 匹配内容 | 建议 |
+|------|----------|------|
+| 收敛性 | `not converged`, `divergence` | 检查载荷步设置 |
+| 步长停滞 | 连续5个 `increment size` 不增大 | 检查接触设置 |
+| 材料缺失 | `no elastic constants`, `no density` | 添加材料卡片 |
+| 输入语法 | `card image cannot be interpreted` | 检查拼写 |
+| 参数错误 | `parameter not recognized` | 检查参数名大小写 |
+| 单元质量 | `negative/nonpositive jacobian` | 检查网格质量 |
+| 位移异常 | 位移超出合理范围 | 检查边界条件 |
 
 ### 格式转换
 

@@ -384,8 +384,12 @@ class CalculixSolver(BaseSolver):
 
         duration = time.monotonic() - start
 
-        # --- 解析输出 ---
+        # --- 保存 combined output 到文件（供诊断规则扫描）---
+        # 不管哪个平台，stdout 和 stderr 都合并保存
         combined = proc.stdout + proc.stderr
+        if combined.strip():
+            stderr_path = output_dir / f"{job_name}.stderr"
+            stderr_path.write_text(combined, encoding="utf-8")
         errors = self._extract_lines(combined, _ERROR_MARKERS)
         warnings = self._extract_lines(combined, _WARN_MARKERS)
 
