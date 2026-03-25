@@ -797,6 +797,72 @@ console = Console(legacy_windows=False, force_terminal=True)
 err_console = Console(stderr=True, style="bold red", legacy_windows=False)
 
 # ------------------------------------------------------------------ #
+# cae setting
+# ------------------------------------------------------------------ #
+
+@app.command(name="setting")
+def setting(
+    workspace: Optional[Path] = typer.Option(
+        None,
+        "--workspace", "-w",
+        help="工作目录路径",
+        show_default=False,
+    ),
+) -> None:
+    """
+    [bold]设置工作目录[/bold]
+
+    交互式设置工作目录，自动创建以下结构：
+
+    \b
+    工作目录/
+    ├── output/       # 所有输出文件
+    └── solvers/      # 求解器自动安装到这里
+
+    配置文件: ~/.config/cae-cli/config.json
+    """
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]cae setting[/bold cyan] — 工作目录设置",
+        border_style="cyan",
+    ))
+    console.print()
+
+    # 交互式获取工作目录
+    if workspace is None:
+        current = settings.workspace_path
+        default_path = str(current.resolve()) if current else str(Path.cwd())
+        raw = typer.prompt(
+            "  请输入工作目录",
+            default=default_path,
+            show_default=True,
+        )
+        workspace = Path(raw.strip())
+
+    # 确保目录有效
+    if not workspace.exists():
+        try:
+            workspace.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            err_console.print(f"\n  无法创建目录: {workspace}\n  {exc}\n")
+            raise typer.Exit(1)
+
+    # 设置工作目录
+    settings.setup_workspace(workspace)
+
+    console.print(f"  [green]✓[/green] 已创建 [cyan]{workspace}/output/[/cyan]")
+    console.print(f"  [green]✓[/green] 已创建 [cyan]{workspace}/solvers/[/cyan]")
+    console.print(f"  [green]✓[/green] 配置已保存")
+    console.print()
+
+    # 显示当前配置
+    console.print(f"  工作目录: [cyan]{workspace}[/cyan]")
+    console.print(f"  输出目录: [cyan]{settings.workspace_output_dir}[/cyan]")
+    console.print(f"  求解器:   [cyan]{settings.workspace_solver_path}[/cyan]")
+    console.print()
+
+
+# ------------------------------------------------------------------ #
 # cae solve
 # ------------------------------------------------------------------ #
 
@@ -859,7 +925,11 @@ def solve(
 
     # ---- 交互式获取输出目录 ----
     if output is None:
-        default_out = settings.default_output_dir / inp_file.stem
+        # 优先使用工作目录下的 output/，否则使用配置的 default_output_dir
+        if settings.workspace_output_dir:
+            default_out = settings.workspace_output_dir / inp_file.stem
+        else:
+            default_out = settings.default_output_dir / inp_file.stem
         raw_out = typer.prompt(
             f"  输出目录",
             default=str(default_out),
@@ -941,7 +1011,6 @@ def solve(
     version = solver_instance.get_version()
     console.print(f"  使用求解器: [green]{solver}[/green]"
                   + (f"  [dim]({version})[/dim]" if version else ""))
-    console.print(f"  求解器路径: [cyan]{binary}[/cyan]")
     console.print(f"  输入文件:   [cyan]{inp_file}[/cyan]")
     console.print(f"  输出目录:   [cyan]{output}[/cyan]")
     console.print()

@@ -102,6 +102,60 @@ class Settings:
     def solver_path(self, value: str) -> None:
         self.set("solver_path", value)
 
+    # ------------------------------------------------------------------ #
+    # 工作目录配置
+    # ------------------------------------------------------------------ #
+
+    @property
+    def workspace_path(self) -> Path | None:
+        """工作目录路径"""
+        raw = self._data.get("workspace_path")
+        return Path(raw) if raw else None
+
+    @workspace_path.setter
+    def workspace_path(self, value: Path) -> None:
+        self.set("workspace_path", str(value))
+
+    @property
+    def workspace_output_dir(self) -> Path | None:
+        """工作目录下的 output 子目录"""
+        ws = self.workspace_path
+        return ws / "output" if ws else None
+
+    @property
+    def workspace_solvers_dir(self) -> Path | None:
+        """工作目录下的 solvers 子目录"""
+        ws = self.workspace_path
+        return ws / "solvers" if ws else None
+
+    @property
+    def workspace_solver_path(self) -> Path | None:
+        """工作目录下的求解器路径：workspace/solvers/ccx"""
+        solvers = self.workspace_solvers_dir
+        return solvers / "ccx" if solvers else None
+
+    def setup_workspace(self, workspace_path: Path) -> None:
+        """
+        设置工作目录，自动创建子目录结构并保存配置。
+
+        工作目录/
+        ├── output/       # 所有输出文件
+        └── solvers/      # 求解器自动安装到这里
+        """
+        workspace_path = workspace_path.resolve()
+
+        # 创建子目录
+        output_dir = workspace_path / "output"
+        solvers_dir = workspace_path / "solvers"
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        solvers_dir.mkdir(parents=True, exist_ok=True)
+
+        # 保存配置
+        self.workspace_path = workspace_path
+        self.set("default_output_dir", str(output_dir))
+        self.solver_path = str(solvers_dir / "ccx")
+
     def __repr__(self) -> str:  # pragma: no cover
         return (
             f"Settings(config_dir={self.config_dir}, "
