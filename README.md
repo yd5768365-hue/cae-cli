@@ -385,6 +385,35 @@ cae diagnose results/ --no-explain             # 跳过 AI 解读
 cae diagnose results/ --no-suggest            # 跳过 AI 建议
 ```
 
+### 自动修复 — 一键修复常见错误
+
+诊断后自动修复检测到的问题，定位由规则层硬编码（确定性），原文件永远不变：
+
+```bash
+# 完整流程
+cae solve model.inp        # 求解失败
+cae diagnose results/ -i model.inp   # 诊断问题
+
+# 诊断结果
+规则检测：发现 1 个问题
+[X] 材料 STEEL 缺少弹性常数
+    -> 在 *MATERIAL 中添加 *ELASTIC
+
+是否自动修复？[y/N]: y
+✓ 原文件已保留：model_original.inp
+✓ 修复文件已生成：model_fixed.inp
+
+# 验证修复
+cae solve model_fixed.inp  # 求解成功！
+```
+
+**对比展示**（比任何文字描述都有说服力）：
+
+| 状态 | constants per material | 求解结果 |
+|------|----------------------|----------|
+| 修复前 | **0** | ✗ ERROR: no elastic constants |
+| 修复后 | **2** | ✓ Job finished |
+
 ### `cae test` — 测试
 
 ```bash
