@@ -1079,13 +1079,12 @@ def _run_ai_diagnosis(
 ) -> Optional[str]:
     """运行 AI 深度诊断。"""
     try:
-        stderr_summary = _get_stderr_summary(results_dir)
-        physical_data = _get_physical_data(results_dir)  # 新增：提取物理数据
-
         all_issues = level1_issues + level2_issues
-        # 即使没有问题，也提取诊断信息（用于用户了解结果）
-        # if not all_issues:
-        #     return None
+
+        # 三层精准摘要
+        stderr_snippets = _get_stderr_snippets(results_dir, all_issues)  # stderr 直接证据
+        stderr_summary = _get_stderr_summary(results_dir)  # 收敛指标
+        physical_data = _get_physical_data(results_dir)  # 关键物理数据
 
         issue_dicts = [
             {
@@ -1098,7 +1097,7 @@ def _run_ai_diagnosis(
             for i in all_issues
         ]
 
-        prompt_text = make_diagnose_prompt(issue_dicts, stderr_summary, similar_cases, physical_data)
+        prompt_text = make_diagnose_prompt(issue_dicts, stderr_snippets, stderr_summary, similar_cases, physical_data)
 
         if stream:
             handler = StreamHandler()
@@ -1260,3 +1259,72 @@ def _get_stderr_summary(results_dir: Path) -> str:
             pass
 
     return "\n".join(summaries) if summaries else "（无收敛数据）"
+
+
+def _get_stderr_snippets(results_dir: Path, issues: list) -> str:
+    """
+    提取与规则检测问题直接相关的 stderr 片段。
+
+    这是规则的直接证据，不是原始数据。
+    """
+    if not issues:
+        return ""
+
+    snippets: list[str] = []
+    stderr_file = None
+
+    # 收集所有 stderr 文件
+    stderr_files = list(results_dir.glob("*.stderr"))
+    if stderr_files:
+        stderr_file = stderr_files[0]
+
+    if stderr_file is None:
+        return ""
+
+    try:
+        text = stderr_file.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+
+        # 为每个 issue 找到对应的 stderr 片段
+        for issue in issues:
+            message = issue.message.lower() if issue.message else ""
+
+            # 关键词匹配
+            keywords = []
+            if "elastic" in message:
+                keywords.extend(["elastic", "elastic constants"])
+            if "density" in message:
+                keywords.append("density")
+            if "converge" in message or "收敛" in message:
+                keywords.extend(["converge", "not converged", "divergence"])
+            if "jacobian" in message:
+                keywords.append("jacobian")
+            if "hourglass" in message:
+                keywords.append("hourglassing")
+
+            # 找到匹配的行的上下文（前后各2行）
+            for i, line in enumerate(lines):
+                line_lower = line.lower()
+                for kw in keywords:
+                    if kw in line_lower:
+                        # 提取片段（前后各2行）
+                        start = max(0, i - 2)
+                        end = min(len(lines), i + 3)
+                        snippet_lines = lines[start:end]
+
+                        # 标记匹配行
+                        for j in range(len(snippet_lines)):
+                            if i - start == j:
+                                snippet_lines[j] = f">>> {snippet_lines[j]}"
+                            else:
+                                snippet_lines[j] = f"    {snippet_lines[j]}"
+
+                        snippets.append(f"--- 匹配片段 ({stderr_file.name} 行 {i+1}) ---")
+                        snippets.extend(snippet_lines)
+                        snippets.append("")
+                        break  # 只取第一个匹配
+
+    except OSError:
+        pass
+
+    return "\n".join(snippets) if snippets else "（无相关片段）"

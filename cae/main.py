@@ -2198,6 +2198,23 @@ def diagnose(
                 console.print(f"     预期改进: {sug.expected_improvement}")
             console.print()
 
+    # ========== 自动修复（规则层定位）==========
+    if result.issues and inp_file and inp_file.exists():
+        console.print()
+        console.print("  [bold yellow]是否自动修复这些问题？[y/N]:[/bold yellow] ", end="")
+        user_input = input().strip().lower()
+        if user_input == "y":
+            from cae.ai.fix_rules import fix_inp
+            fix_result = fix_inp(inp_file, result.issues, results_dir)
+            if fix_result.success:
+                console.print(f"  [green]✓ 原文件已保留: {fix_result.backup_path}[/green]")
+                console.print(f"  [green]✓ 修复文件已生成: {fix_result.fixed_path}[/green]")
+                console.print(f"  [dim]修复内容: {fix_result.changes_summary}[/dim]")
+            else:
+                console.print(f"  [red]✗ {fix_result.error}[/red]")
+        else:
+            console.print("  已跳过自动修复")
+
     console.print()
 
 
