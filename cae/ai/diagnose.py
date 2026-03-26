@@ -113,6 +113,7 @@ def diagnose_results(
         result.level1_issues.extend(_check_rigid_body_mode(results_dir, inp_file))
         result.level1_issues.extend(_check_material_yield(results_dir, inp_file))
         result.level1_issues.extend(_check_unit_consistency(results_dir, inp_file))
+        result.level1_issues.extend(_check_load_transfer(results_dir))
 
         # ========== Level 2: 参考案例对比（无条件执行）==========
         ref_result = _check_reference_cases(results_dir, inp_file)
@@ -186,6 +187,12 @@ MPC_LIMIT_PATTERNS = [
     re.compile(r"increase nboun_", re.IGNORECASE),
     re.compile(r"increase nk_", re.IGNORECASE),
     re.compile(r"increase memmpc_", re.IGNORECASE),
+]
+
+# 载荷传递问题检测模式
+LOAD_TRANSFER_PATTERNS = [
+    re.compile(r"RHS only consists of 0\.0", re.IGNORECASE),
+    re.compile(r"concentrated loads:\s*0\s*$", re.IGNORECASE | re.MULTILINE),
 ]
 
 
@@ -409,6 +416,51 @@ def _check_parameter_syntax(results_dir: Path) -> list[DiagnosticIssue]:
                     suggestion="检查卡片参数拼写是否正确。CalculiX 参数名区分大小写，常见错误：PARAMETERS 而非 PARAMETER",
                 ))
                 break
+
+        except OSError:
+            pass
+
+    return issues
+
+
+def _check_load_transfer(results_dir: Path) -> list[DiagnosticIssue]:
+    """
+    检查载荷传递问题：载荷未正确传递到结构。
+
+    扫描 .stderr 文件，匹配以下模式：
+    - "RHS only consists of 0.0"：载荷向量为零，通常是耦合约束配置错误
+    - "concentrated loads: 0"：集中载荷数量为零
+    """
+    issues: list[DiagnosticIssue] = []
+
+    for stderr_file in results_dir.glob("*.stderr"):
+        try:
+            text = stderr_file.read_text(encoding="utf-8", errors="replace")
+
+            for pattern in LOAD_TRANSFER_PATTERNS:
+                match = pattern.search(text)
+                if match:
+                    matched_text = match.group(0).lower()
+                    if "rhs only consists of 0.0" in matched_text:
+                        msg = "载荷向量为零（RHS only consists of 0.0），载荷未正确传递到结构"
+                        suggestion = (
+                            "检查以下可能原因：\n"
+                            "1) *COUPLING 与 *DISTRIBUTING 联用时，载荷必须使用 *DLOAD 而非 *CLOAD\n"
+                            "2) 检查 *COUPLING 的 REF NODE 是否正确设置\n"
+                            "3) 检查耦合约束的 DOF 是否与载荷方向一致\n"
+                            "4) 如果使用 DISTRIBUTING 耦合，改用 *DLOAD 在表面施加分布载荷"
+                        )
+                    else:
+                        msg = "集中载荷数量为零，载荷未正确定义"
+                        suggestion = "检查 *CLOAD 或 *DLOAD 是否正确施加"
+                    issues.append(DiagnosticIssue(
+                        severity="error",
+                        category="load_transfer",
+                        message=msg,
+                        location=stderr_file.name,
+                        suggestion=suggestion,
+                    ))
+                    break
 
         except OSError:
             pass
