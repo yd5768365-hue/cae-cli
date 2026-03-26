@@ -102,6 +102,15 @@ class Settings:
     def solver_path(self, value: str) -> None:
         self.set("solver_path", value)
 
+    @property
+    def builtin_solver_paths(self) -> str:
+        """内置求解器搜索路径（逗号分隔，用于分发场景）"""
+        return self._data.get("builtin_solver_paths", "")
+
+    @builtin_solver_paths.setter
+    def builtin_solver_paths(self, value: str) -> None:
+        self.set("builtin_solver_paths", value)
+
     # ------------------------------------------------------------------ #
     # 工作目录配置
     # ------------------------------------------------------------------ #

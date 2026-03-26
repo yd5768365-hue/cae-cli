@@ -34,35 +34,21 @@ _CCX_NAMES = ["ccx", "ccx_2.21", "ccx_2.20", "ccx_2.19", "ccx_2.18", "CalculiX"]
 
 def _get_project_ccx_path() -> Optional[Path]:
     """获取项目内置的 ccx.exe 路径（相对于当前文件位置）"""
-    # 项目目录结构: cae/solvers/calculix.py -> 项目根目录
+    # 从配置读取内置求解器路径列表
     project_root = Path(__file__).parent.parent.parent
+    builtin_paths_raw = settings._data.get("builtin_solver_paths", "")
+    if builtin_paths_raw:
+        paths = [Path(p.strip()) for p in builtin_paths_raw.split(",") if p.strip()]
+    else:
+        # 默认内置路径（相对于项目根目录）
+        paths = [
+            project_root / "cxx.exe" / "ccx.exe",
+            project_root / "release" / "ccx" / "ccx.exe",
+        ]
 
-    # 可能的求解器位置
-    # 优先使用独立版本（CalculiX-Portable），因为它无需额外 DLL
-    # 需要同时检查项目目录和兄弟目录（CalculiX-Portable 可能与 cae-cli 并列）
-    candidates = [
-        # 兄弟目录的 CalculiX-Portable（独立版本，优先级最高）
-        project_root.parent / "CalculiX-Portable" / "bin" / "ccx.exe",
-        project_root.parent / "CalculiX-Portable" / "bin" / "ccx_i8.exe",
-        # 项目内的 CalculiX-Portable（独立版本）
-        project_root / "CalculiX-Portable" / "bin" / "ccx.exe",
-        project_root / "CalculiX-Portable" / "bin" / "ccx_i8.exe",
-        # 独立版本优先级更高，即使其他版本先被检测到也跳过
-    ]
-
-    # 先找 CalculiX-Portable（独立版本）
-    for ccx_path in candidates[:4]:
+    for ccx_path in paths:
         if ccx_path.is_file():
             return ccx_path.resolve()
-
-    # 如果没有独立版本，再找需要 DLL 的版本
-    fallback = [
-        project_root / "cxx.exe" / "ccx.exe",  # 项目内
-    ]
-    for ccx_path in fallback:
-        if ccx_path.is_file():
-            return ccx_path.resolve()
-
     return None
 
 
@@ -70,15 +56,18 @@ def _get_project_dll_dir() -> Optional[Path]:
     """获取项目内置的 DLL 目录路径"""
     project_root = Path(__file__).parent.parent.parent
 
-    # 可能的 DLL 目录位置
-    # 注意：CalculiX-Portable/bin 中的 ccx.exe 是独立的，不需要额外 DLL
-    dll_dirs = [
-        project_root / "CalculiX-Portable" / "bin",  # 项目内（独立版本）
-        project_root / "cxx.exe" / "dlls",  # 项目内（需要 DLL 的版本）
-        project_root.parent / "CalculiX-Portable" / "bin",  # 兄弟目录（独立版本）
-    ]
+    # 从配置读取内置求解器路径列表
+    builtin_paths_raw = settings._data.get("builtin_solver_paths", "")
+    if builtin_paths_raw:
+        paths = [Path(p.strip()) / "dlls" for p in builtin_paths_raw.split(",") if p.strip()]
+        paths.extend([Path(p.strip()) for p in builtin_paths_raw.split(",") if p.strip()])
+    else:
+        # 默认内置 DLL 路径
+        paths = [
+            project_root / "cxx.exe" / "dlls",
+        ]
 
-    for dll_dir in dll_dirs:
+    for dll_dir in paths:
         if dll_dir.is_dir():
             return dll_dir.resolve()
     return None
