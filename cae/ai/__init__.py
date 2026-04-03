@@ -27,11 +27,13 @@ __all__ = [
     "Suggestion",
     "SuggestResult",
     "CadResult",
+    "ChainReasoningResult",
     # 函数
     "explain_results",
     "diagnose_results",
     "suggest_results",
     "CadGenerator",
+    "ChainReasoner",
 ]
 
 
@@ -53,6 +55,12 @@ def __getattr__(name: str):
     if name in ("CadResult",):
         from cae.ai.cad_generator import CadResult
         return CadResult
+    if name in ("ChainReasoningResult",):
+        from cae.ai.chain_reasoning import ChainReasoningResult
+        return ChainReasoningResult
+    if name in ("ChainReasoner",):
+        from cae.ai.chain_reasoning import ChainReasoner
+        return ChainReasoner
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

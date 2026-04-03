@@ -37,6 +37,8 @@ class LLMConfig:
     timeout: int = 30
     use_server: bool = False  # 默认使用 direct 模式
     use_ollama: bool = False  # 使用 Ollama 后端
+    provider: str = "ollama"  # "ollama" | "deepseek"
+    api_key: Optional[str] = None  # DeepSeek API key
 
 
 @dataclass
@@ -202,8 +204,10 @@ class LLMClient:
         Returns:
             完整生成的文本
         """
-        if self.config.use_ollama:
+        if self.config.use_ollama or self.config.provider == "ollama":
             return self._complete_ollama(prompt, max_tokens, temperature)
+        if self.config.provider == "deepseek":
+            return self._complete_deepseek(prompt, max_tokens, temperature)
         if self._llm:
             return self._complete_direct(prompt, max_tokens, temperature, stop)
         return self._complete_server(prompt, max_tokens, temperature, stop, stream=False)
@@ -279,6 +283,21 @@ class LLMClient:
             return thinking
         return response
 
+    def _complete_deepseek(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """DeepSeek API 后端补全。"""
+        from .deepseek_client import DeepSeekClient
+
+        ds_client = DeepSeekClient(
+            model=self.config.model_name or "deepseek-reasoner",
+            api_key=self.config.api_key,
+        )
+        return ds_client.complete(prompt)
+
     def complete_streaming(self, prompt: str, **kwargs) -> Iterator[str]:
         """
         流式补全，yield 每个 token。
@@ -290,9 +309,15 @@ class LLMClient:
         temperature = kwargs.get("temperature", 0.7)
         stop = kwargs.get("stop", [])
 
-        if self.config.use_ollama:
+        if self.config.use_ollama or self.config.provider == "ollama":
             # Ollama 非流式（简化处理）
             result = self._complete_ollama(prompt, max_tokens, temperature)
+            yield result
+            return
+
+        if self.config.provider == "deepseek":
+            # DeepSeek 非流式（简化处理）
+            result = self._complete_deepseek(prompt, max_tokens, temperature)
             yield result
             return
 

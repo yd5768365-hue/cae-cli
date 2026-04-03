@@ -111,6 +111,15 @@ class Settings:
     def builtin_solver_paths(self, value: str) -> None:
         self.set("builtin_solver_paths", value)
 
+    @property
+    def deepseek_api_key(self) -> str | None:
+        """DeepSeek API key"""
+        return self._data.get("deepseek_api_key")
+
+    @deepseek_api_key.setter
+    def deepseek_api_key(self, value: str) -> None:
+        self.set("deepseek_api_key", value)
+
     # ------------------------------------------------------------------ #
     # 工作目录配置
     # ------------------------------------------------------------------ #

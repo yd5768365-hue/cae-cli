@@ -1199,7 +1199,7 @@ def info() -> None:
 # cae run - 全流程一键运行（网格 → 求解 → 可视化）
 # ------------------------------------------------------------------ #
 
-@app.command(name="run")
+@app.command(name="run", hidden=True)
 def run(
     model_file: Optional[Path] = typer.Argument(None, help="模型文件路径"),
 ) -> None:
