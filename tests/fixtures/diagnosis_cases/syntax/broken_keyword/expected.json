@@ -1,0 +1,12 @@
+{
+  "case_id": "syntax/broken_keyword",
+  "title": "Broken material keyword",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "input_syntax"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "Misspelled *ELASTIC keyword should trigger input syntax detection."
+}

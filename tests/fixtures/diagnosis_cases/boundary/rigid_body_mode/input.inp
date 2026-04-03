@@ -1,0 +1,13 @@
+*HEADING
+Rigid body mode sample
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+*BOUNDARY
+** no active constraints
+*STEP
+*STATIC
+0.1, 1.0
+*CLOAD
+2, 2, -100.0
+*END STEP

@@ -9,6 +9,47 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+CALCULIX_SYNTAX_GUARD = """
+## CalculiX 语法硬约束
+
+- 修复建议中的 CalculiX 语法必须完全正确。
+- 禁止使用任何不存在的关键词、参数名、卡片格式或“伪代码式”INP 写法。
+- 禁止编造节点号、单元号、表面名、自由度编号、载荷值、材料名；如果证据里没有这些具体值，只能使用占位符或文字说明。
+- 如果你不能确定某条 INP 语法的准确写法，就不要输出该代码片段，改为只描述修改方向。
+
+### 允许使用的正确模板
+
+材料弹性：
+```text
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000, 0.3
+```
+
+集中载荷：
+```text
+*CLOAD
+<node_id>, <dof>, <value>
+```
+
+静力步：
+```text
+*STEP
+*STATIC
+0.01, 1.0
+*END STEP
+```
+
+### 明确禁止
+
+- 禁止写成 `*MATERIAL` 下一行直接 `E=2.1e+11`
+- 禁止写成 `ELASTIC, TYPE=ISOTROPIC` 这种不存在的 CalculiX 片段
+- 禁止写成 `*C LOAD`
+- 禁止输出 `DLOAD 0 0 -187500 at node 3` 这类自然语言混合伪语法
+- 除非证据里已经给出正确对象和载荷类型，否则不要自行生成具体 `*DLOAD` 数据行
+"""
+
+
 @dataclass
 class PromptTemplate:
     """Prompt 模板，包含系统提示和用户提示格式。"""
@@ -72,7 +113,7 @@ def make_explain_prompt(
 # diagnose 模板
 # ------------------------------------------------------------------ #
 
-DIAGNOSE_SYSTEM = """你是一位资深的有限元分析（FEA）工程师，擅长诊断 CalculiX 仿真中的错误和警告。
+DIAGNOSE_SYSTEM = f"""你是一位资深的有限元分析（FEA）工程师，擅长诊断 CalculiX 仿真中的错误和警告。
 
 ## CalculiX 核心知识速查
 
@@ -167,6 +208,8 @@ CalculiX 要求以下材料属性必须定义：
 - ❌ `*CONTACT CONTROLS`、`*SURFACE INTERACTION` 参数名错误
 - ❌ `*STATIC,0.01,1.0` 卡片名与参数之间不能有逗号
 - ✅ 正确：`*STATIC` 后换行写参数
+
+{CALCULIX_SYNTAX_GUARD}
 
 请直接回答，不要泛泛而谈。"""
 
@@ -512,3 +555,86 @@ CAD_SYSTEM = """你是一位 CadQuery 专家，擅长生成参数化几何代码
 4. 代码可直接运行
 
 输出格式：纯 Python 代码块，不要解释。"""
+
+
+def make_diagnose_prompt_v2(
+    rule_issues: list[dict],
+    stderr_snippets: str = "",
+    *,
+    physical_data: str = "",
+    stderr_summary: str = "",
+    similar_cases: list[dict] | None = None,
+) -> str:
+    """Generate an evidence-focused prompt for local diagnosis models."""
+    if rule_issues:
+        issues_lines = []
+        for idx, issue in enumerate(rule_issues, 1):
+            location = f" | location={issue['location']}" if issue.get("location") else ""
+            suggestion = f" | rule_fix={issue['suggestion']}" if issue.get("suggestion") else ""
+            issues_lines.append(
+                f"{idx}. [{issue['severity']}] {issue['category']}: {issue['message']}{location}{suggestion}"
+            )
+        issues_text = "\n".join(issues_lines)
+    else:
+        issues_text = "无明确规则问题。"
+
+    if similar_cases:
+        case_lines = []
+        for idx, case in enumerate(similar_cases[:3], 1):
+            parts = [f"{idx}. {case['name']}", f"similarity={case.get('similarity_score', 'N/A')}%"]
+            if case.get("element_type"):
+                parts.append(f"element={case['element_type']}")
+            if case.get("problem_type"):
+                parts.append(f"type={case['problem_type']}")
+            if case.get("expected_disp_max") is not None:
+                parts.append(f"disp_ref={case['expected_disp_max']}")
+            if case.get("expected_stress_max") is not None:
+                parts.append(f"stress_ref={case['expected_stress_max']}")
+            case_lines.append(" | ".join(parts))
+        similar_cases_text = "\n".join(case_lines)
+    else:
+        similar_cases_text = "无可用参考案例。"
+
+    return f"""{DIAGNOSE_SYSTEM}
+
+## 已提取证据
+
+### 规则层问题
+{issues_text}
+
+### 物理量摘要
+{physical_data or "无物理量摘要。"}
+
+### 收敛摘要
+{stderr_summary or "无收敛摘要。"}
+
+### 参考案例
+{similar_cases_text}
+
+### stderr 证据片段
+{stderr_snippets or "无 stderr 证据片段。"}
+
+## 回答要求
+1. 先给“最可能根因”，最多 3 条，按置信度排序。
+2. 每条根因必须明确引用上面的证据，不要脱离证据猜测。
+3. 修复建议必须具体到 CalculiX 可操作修改，必要时给最小 INP 片段。
+4. 如果存在单位问题、边界条件问题或接触/载荷传递问题，优先指出。
+5. 禁止使用 Abaqus 专有语法，只能给 CalculiX 写法。
+6. 修复建议中的 CalculiX 语法必须完全正确，禁止使用任何不存在的关键词或格式。
+7. 若证据中没有具体 node_id / dof / value / set 名称 / surface 名称，只能使用 `<node_id>`、`<dof>`、`<value>` 这类占位符，禁止编造具体数值。
+8. 若不能确认某段 INP 语法完全正确，则不要输出代码片段，只能给文字建议。
+
+{CALCULIX_SYNTAX_GUARD}
+
+请按下面格式输出：
+最可能根因：
+- [高/中/低] 根因名称：一句话结论。证据：...
+
+修复建议：
+1. ...
+2. ...
+
+验证步骤：
+1. ...
+2. ...
+"""

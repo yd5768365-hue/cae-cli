@@ -1,0 +1,2 @@
+WARNING: contact not found for interaction INT1
+slave surface SURF_A is not properly defined

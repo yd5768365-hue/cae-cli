@@ -1,0 +1,2 @@
+ERROR: the rhs only consists of 0.0
+check load transfer and coupling definition

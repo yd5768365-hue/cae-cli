@@ -1,0 +1,2 @@
+WARNING: zero pivot in SPOOLES
+WARNING: numerical singularity detected

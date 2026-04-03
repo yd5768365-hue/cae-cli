@@ -1,0 +1,12 @@
+{
+  "case_id": "boundary/rigid_body_mode",
+  "title": "Rigid body mode due to missing constraints",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "rigid_body_mode"
+  ],
+  "expected_severities": [
+    "warning"
+  ],
+  "notes": "Missing effective constraints should trigger rigid body mode or boundary diagnostics."
+}

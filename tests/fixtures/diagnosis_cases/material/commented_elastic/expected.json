@@ -1,0 +1,12 @@
+{
+  "case_id": "material/commented_elastic",
+  "title": "Commented-out elastic block",
+  "source_type": "self_made",
+  "expected_issue_keys": [
+    "material"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "The elastic card exists only in comments and should still be treated as missing."
+}

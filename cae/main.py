@@ -778,38 +778,18 @@ console = Console(legacy_windows=False, force_terminal=True)
 err_console = Console(stderr=True, style="bold red", legacy_windows=False)
 
 # ------------------------------------------------------------------ #
-# cae setting
+# cae config
 # ------------------------------------------------------------------ #
 
-@app.command(name="setting")
-def setting(
-    workspace: Optional[Path] = typer.Option(
-        None,
-        "--workspace", "-w",
-        help="工作目录路径",
-        show_default=False,
-    ),
-) -> None:
-    """
-    [bold]设置工作目录[/bold]
-
-    交互式设置工作目录，自动创建以下结构：
-
-    \b
-    工作目录/
-    ├── output/       # 所有输出文件
-    └── solvers/      # 求解器自动安装到这里
-
-    配置文件: ~/.config/cae-cli/config.json
-    """
+def _configure_workspace(workspace: Optional[Path]) -> None:
+    """配置工作目录与派生路径。"""
     console.print()
     console.print(Panel.fit(
-        "[bold cyan]cae setting[/bold cyan] — 工作目录设置",
+        "[bold cyan]cae config[/bold cyan] — 工作目录设置",
         border_style="cyan",
     ))
     console.print()
 
-    # 交互式获取工作目录
     if workspace is None:
         current = settings.workspace_path
         default_path = str(current.resolve()) if current else str(Path.cwd())
@@ -820,7 +800,6 @@ def setting(
         )
         workspace = Path(raw.strip())
 
-    # 确保目录有效
     if not workspace.exists():
         try:
             workspace.mkdir(parents=True, exist_ok=True)
@@ -828,19 +807,43 @@ def setting(
             err_console.print(f"\n  无法创建目录: {workspace}\n  {exc}\n")
             raise typer.Exit(1)
 
-    # 设置工作目录
     settings.setup_workspace(workspace)
 
-    console.print(f"  [green]✓[/green] 已创建 [cyan]{workspace}/output/[/cyan]")
-    console.print(f"  [green]✓[/green] 已创建 [cyan]{workspace}/solvers/[/cyan]")
-    console.print(f"  [green]✓[/green] 配置已保存")
+    console.print(f"  [green]OK[/green] 已创建 [cyan]{workspace}/output/[/cyan]")
+    console.print(f"  [green]OK[/green] 已创建 [cyan]{workspace}/solvers/[/cyan]")
+    console.print("  [green]OK[/green] 配置已保存")
     console.print()
 
-    # 显示当前配置
     console.print(f"  工作目录: [cyan]{workspace}[/cyan]")
     console.print(f"  输出目录: [cyan]{settings.workspace_output_dir}[/cyan]")
     console.print(f"  求解器:   [cyan]{settings.workspace_solver_path}[/cyan]")
     console.print()
+
+
+@app.command(name="config")
+def config(
+    workspace: Optional[Path] = typer.Option(
+        None,
+        "--workspace", "-w",
+        help="工作目录路径",
+        show_default=False,
+    ),
+) -> None:
+    """配置工作目录。"""
+    _configure_workspace(workspace)
+
+
+@app.command(name="setting", hidden=True)
+def setting_legacy(
+    workspace: Optional[Path] = typer.Option(
+        None,
+        "--workspace", "-w",
+        help="工作目录路径",
+        show_default=False,
+    ),
+) -> None:
+    """兼容旧命令别名：请使用 `cae config`。"""
+    _configure_workspace(workspace)
 
 
 # ------------------------------------------------------------------ #
@@ -1702,62 +1705,6 @@ def install(
     console.print("  现在可以运行 [bold]`cae solve`[/bold] 开始仿真\n")
 
 
-@app.command(name="install ai")
-def install_ai(
-    model_name: str = typer.Option("deepseek-r1-7b", "--model", help="指定模型名称"),
-) -> None:
-    """
-    [bold]安装 AI 模型[/bold]
-
-    \b
-    示例：
-      cae install ai
-      cae install ai --model deepseek-r1-14b
-    """
-    from cae.installer.model_installer import ModelInstaller
-
-    console.print()
-    console.print(Panel.fit("[bold cyan]cae install ai[/bold cyan] — 安装 AI 模型", border_style="cyan"))
-    console.print()
-
-    mi = ModelInstaller()
-
-    if mi.is_installed(model_name):
-        console.print(f"  模型已安装: {model_name}\n")
-        mi.activate(model_name)
-        return
-
-    from cae.installer.model_installer import KNOWN_MODELS
-    meta = KNOWN_MODELS.get(model_name)
-    if meta is None:
-        console.print(f"  [red]错误:[/red] 未知模型 '{model_name}'")
-        console.print(f"  可用模型: {', '.join(KNOWN_MODELS.keys())}\n")
-        return
-
-    size = meta.size_gb
-    console.print(f"  模型: [cyan]{model_name}[/cyan]  大小: ~{size} GB")
-    console.print("  这可能需要几分钟，取决于网络速度...\n")
-
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"),
-                  TimeElapsedColumn(), console=console) as progress:
-        task = progress.add_task("  下载中...", total=None)
-
-        def _model_progress(pct: float, msg: str) -> None:
-            progress.update(task, description=f"  {msg}")
-
-        result = mi.install(model_name, progress_callback=_model_progress)
-
-    if result.success:
-        console.print()
-        console.print(f"  [green]AI 模型安装成功[/green]")
-        console.print(f"  使用 [bold]`cae diagnose --help`[/bold] 查看 AI 诊断功能\n")
-    else:
-        console.print()
-        console.print(f"  [yellow]AI 模型安装失败[/yellow]")
-        console.print(f"  {result.error_message}")
-        console.print()
-
-
 @app.command()
 def diagnose(
     results_dir: Optional[Path] = typer.Argument(None, help="结果目录"),
@@ -1774,7 +1721,7 @@ def diagnose(
 
     使用 [bold]--ai[/bold] 启用 AI 深度诊断。
     """
-    from cae.ai.diagnose import diagnose_results
+    from cae.ai.diagnose import build_diagnosis_summary, diagnose_results
 
     console.print()
     console.print(Panel.fit("[bold cyan]cae diagnose[/bold cyan] — 诊断仿真问题", border_style="cyan"))
@@ -1815,12 +1762,19 @@ def diagnose(
 
     # 显示规则检测结果
     if result.issues:
-        console.print(f"  [bold red]发现 {result.issue_count} 个问题[/bold red]")
+        summary = build_diagnosis_summary(result.issues)
+        top_issue = summary["top_issue"]
+        console.print(f"  [bold red]发现 {summary['total']} 个问题[/bold red]")
+        console.print(f"  严重问题: [red]{summary['error_count']}[/red]  警告: [yellow]{summary['warning_count']}[/yellow]")
+        if top_issue is not None:
+            console.print(f"  最优先问题: [bold]{top_issue.title}[/bold]")
+            console.print(f"  首步操作: {summary['first_action'] or '先按最高优先级问题检查输入与约束'}")
         for iss in result.issues[:15]:
             icon = "[red]X[/red]" if iss.severity == "error" else "[yellow]![/yellow]"
-            console.print(f"  {icon} [{iss.category}] {iss.message[:80]}")
-            if iss.suggestion:
-                console.print(f"     -> {iss.suggestion}")
+            priority_text = f"P{iss.priority}" if iss.priority is not None else "P?"
+            console.print(f"  {icon} [{priority_text}] [{iss.category}] {iss.cause[:80]}")
+            if iss.action:
+                console.print(f"     -> {iss.action}")
         console.print()
     else:
         console.print("  [green]✓ 规则检测未发现明显问题[/green]\n")
@@ -1839,21 +1793,38 @@ def diagnose(
         console.print(Panel(result.level3_diagnosis, title="AI 诊断", border_style="yellow"))
         console.print()
 
-    # ========== 自动修复（规则层定位）==========
+    # ========== 自动修复（仅安全白名单）==========
     if result.issues and inp_file and inp_file.exists():
-        console.print("  [bold yellow]是否自动修复这些问题？[y/N]:[/bold yellow] ", end="")
-        user_input = input().strip().lower()
-        if user_input == "y":
-            from cae.ai.fix_rules import fix_inp
-            fix_result = fix_inp(inp_file, result.issues, results_dir)
-            if fix_result.success:
-                console.print(f"  [green]✓ 原文件已保留: {fix_result.backup_path}[/green]")
-                console.print(f"  [green]✓ 修复文件已生成: {fix_result.fixed_path}[/green]")
-                console.print(f"  [dim]修复内容: {fix_result.changes_summary}[/dim]")
+        from cae.ai.fix_rules import fix_inp, get_safe_autofixable_issues
+
+        safe_fixable_issues = get_safe_autofixable_issues(result.issues)
+        if safe_fixable_issues:
+            console.print(
+                f"  [bold yellow]是否执行安全自动修复？[/bold yellow] "
+                f"[dim](仅白名单问题，当前可修复 {len(safe_fixable_issues)} 项)[/dim] [bold yellow][y/N]:[/bold yellow] ",
+                end="",
+            )
+            user_input = input().strip().lower()
+            if user_input == "y":
+                fix_result = fix_inp(inp_file, result.issues, results_dir)
+                if fix_result.success:
+                    console.print(f"  [green]✓ 原文件已保留: {fix_result.backup_path}[/green]")
+                    console.print(f"  [green]✓ 修复文件已生成: {fix_result.fixed_path}[/green]")
+                    console.print(f"  [dim]修复内容: {fix_result.changes_summary}[/dim]")
+                    status_label = {
+                        "passed": "[green]passed[/green]",
+                        "failed": "[red]failed[/red]",
+                        "skipped": "[yellow]skipped[/yellow]",
+                    }.get(fix_result.verification_status, f"[yellow]{fix_result.verification_status}[/yellow]")
+                    console.print(f"  [dim]修复后验证状态: {status_label}[/dim]")
+                    if fix_result.verification_notes:
+                        console.print(f"  [dim]验证说明: {fix_result.verification_notes}[/dim]")
+                else:
+                    console.print(f"  [red]✗ {fix_result.error}[/red]")
             else:
-                console.print(f"  [red]✗ {fix_result.error}[/red]")
+                console.print("  已跳过安全自动修复")
         else:
-            console.print("  已跳过自动修复")
+            console.print("  [dim]未发现白名单内可自动修复的问题[/dim]")
 
     console.print()
 

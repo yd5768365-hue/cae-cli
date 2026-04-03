@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 from .llm_client import LLMClient
-from .prompts import DIAGNOSE_SYSTEM, make_diagnose_prompt
+from .prompts import make_diagnose_prompt_v2
 from .stream_handler import StreamHandler
 from .explain import _find_frd, _extract_stats
 from .reference_cases import CaseMetadata, CaseDatabase, parse_inp_metadata, ClassificationTree
@@ -46,6 +46,58 @@ _FRD_VALUE_WIDTH = 12
 
 # 参考案例库路径
 REFERENCE_CASES_PATH = Path(__file__).parent / "data" / "reference_cases.json"
+SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
+CATEGORY_TITLES = {
+    "boundary_condition": "Boundary Condition Issue",
+    "convergence": "Convergence Issue",
+    "contact": "Contact Definition Issue",
+    "displacement": "Displacement Range Issue",
+    "dynamics": "Dynamics Analysis Issue",
+    "element_quality": "Element Quality Issue",
+    "file_io": "File I/O Issue",
+    "input_syntax": "Input Syntax Issue",
+    "large_strain": "Large Strain Issue",
+    "limit_exceeded": "Solver Limit Exceeded",
+    "load_transfer": "Load Transfer Issue",
+    "material": "Material Definition Issue",
+    "material_yield": "Material Yield Issue",
+    "mesh_quality": "Mesh Quality Issue",
+    "reference_comparison": "Reference Comparison Issue",
+    "rigid_body_mode": "Rigid Body Mode Risk",
+    "stress_concentration": "Stress Concentration Issue",
+    "unit_consistency": "Unit Consistency Issue",
+    "user_element": "User Element Issue",
+}
+PRIORITY_BY_CATEGORY = {
+    "file_io": 1,
+    "input_syntax": 1,
+    "material": 1,
+    "boundary_condition": 1,
+    "load_transfer": 1,
+    "convergence": 2,
+    "contact": 2,
+    "rigid_body_mode": 2,
+    "element_quality": 2,
+    "limit_exceeded": 2,
+    "unit_consistency": 3,
+    "large_strain": 3,
+    "material_yield": 3,
+    "mesh_quality": 3,
+    "stress_concentration": 3,
+    "displacement": 3,
+    "dynamics": 3,
+    "reference_comparison": 4,
+    "user_element": 4,
+}
+INVALID_SYNTAX_PATTERNS = [
+    r"\*C\s+LOAD",
+    r"E\s*=\s*[\d.e+\-]+",
+    r"DLOAD\s+\d+\s+\d+",
+    r"at\s+node\s+\d+",
+]
+AI_OUTPUT_SYNTAX_WARNING = (
+    "注意：AI 生成的代码片段已被移除，请参考 CalculiX 文档确认正确语法。"
+)
 
 
 @dataclass
@@ -56,6 +108,20 @@ class DiagnosticIssue:
     message: str
     location: Optional[str] = None
     suggestion: Optional[str] = None
+    priority: Optional[int] = None
+    auto_fixable: Optional[bool] = None
+
+    @property
+    def title(self) -> str:
+        return CATEGORY_TITLES.get(self.category, self.category.replace("_", " ").title())
+
+    @property
+    def cause(self) -> str:
+        return self.message.strip()
+
+    @property
+    def action(self) -> str:
+        return (self.suggestion or "").strip()
 
 
 @dataclass
@@ -71,7 +137,7 @@ class DiagnoseResult:
     @property
     def issues(self) -> list[DiagnosticIssue]:
         """所有问题的合并列表。"""
-        return self.level1_issues + self.level2_issues
+        return normalize_issues(self.level1_issues + self.level2_issues)
 
     @property
     def issue_count(self) -> int:
@@ -127,6 +193,108 @@ def _build_context(
             ctx.inp_file = inp_file
         return ctx
     return DiagnosisContext(results_dir=results_dir, inp_file=inp_file)
+
+
+def _normalize_text_key(text: str) -> str:
+    lowered = text.strip().lower()
+    lowered = re.sub(r"\s+", " ", lowered)
+    lowered = re.sub(r"[^\w\s]+", "", lowered)
+    return lowered
+
+
+def _issue_dedup_key(issue: DiagnosticIssue) -> tuple[str, str]:
+    return issue.category, _normalize_text_key(issue.message)
+
+
+def _infer_priority(issue: DiagnosticIssue) -> int:
+    if issue.priority is not None:
+        return issue.priority
+    base = PRIORITY_BY_CATEGORY.get(issue.category, 4)
+    severity_rank = SEVERITY_ORDER.get(issue.severity, 2)
+    return min(5, base + severity_rank)
+
+
+def _infer_auto_fixable(issue: DiagnosticIssue) -> bool:
+    if issue.auto_fixable is not None:
+        return issue.auto_fixable
+
+    message_key = _normalize_text_key(issue.message)
+    suggestion_key = _normalize_text_key(issue.suggestion or "")
+
+    if issue.category == "material" and "elastic" in message_key:
+        return True
+    if issue.category == "input_syntax" and "step" in message_key:
+        return True
+    if issue.category == "convergence" and (
+        "increment" in message_key or "increment" in suggestion_key or "static" in suggestion_key
+    ):
+        return True
+    return False
+
+
+def _should_replace_issue(current: DiagnosticIssue, candidate: DiagnosticIssue) -> bool:
+    current_rank = SEVERITY_ORDER.get(current.severity, 2)
+    candidate_rank = SEVERITY_ORDER.get(candidate.severity, 2)
+    if candidate_rank != current_rank:
+        return candidate_rank < current_rank
+
+    current_has_suggestion = bool((current.suggestion or "").strip())
+    candidate_has_suggestion = bool((candidate.suggestion or "").strip())
+    if candidate_has_suggestion != current_has_suggestion:
+        return candidate_has_suggestion
+
+    current_priority = _infer_priority(current)
+    candidate_priority = _infer_priority(candidate)
+    if candidate_priority != current_priority:
+        return candidate_priority < current_priority
+
+    current_has_location = bool((current.location or "").strip())
+    candidate_has_location = bool((candidate.location or "").strip())
+    return candidate_has_location and not current_has_location
+
+
+def normalize_issues(issues: list[DiagnosticIssue]) -> list[DiagnosticIssue]:
+    deduped: dict[tuple[str, str], DiagnosticIssue] = {}
+    for issue in issues:
+        normalized = DiagnosticIssue(
+            severity=issue.severity,
+            category=issue.category,
+            message=issue.message.strip(),
+            location=issue.location.strip() if issue.location else None,
+            suggestion=issue.suggestion.strip() if issue.suggestion else None,
+            priority=_infer_priority(issue),
+            auto_fixable=_infer_auto_fixable(issue),
+        )
+        key = _issue_dedup_key(normalized)
+        existing = deduped.get(key)
+        if existing is None or _should_replace_issue(existing, normalized):
+            deduped[key] = normalized
+
+    return sorted(
+        deduped.values(),
+        key=lambda issue: (
+            SEVERITY_ORDER.get(issue.severity, 2),
+            issue.priority if issue.priority is not None else 99,
+            issue.category,
+            _normalize_text_key(issue.message),
+        ),
+    )
+
+
+def build_diagnosis_summary(issues: list[DiagnosticIssue]) -> dict:
+    normalized = normalize_issues(issues)
+    errors = [issue for issue in normalized if issue.severity == "error"]
+    warnings = [issue for issue in normalized if issue.severity == "warning"]
+    auto_fixable = [issue for issue in normalized if issue.auto_fixable]
+    top_issue = normalized[0] if normalized else None
+    return {
+        "total": len(normalized),
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "auto_fixable_count": len(auto_fixable),
+        "top_issue": top_issue,
+        "first_action": top_issue.action if top_issue else "",
+    }
 
 
 def _glob_cached(
@@ -580,10 +748,11 @@ def diagnose_results(
         result.level1_issues.extend(_check_mpc_limits(results_dir, ctx=ctx))
         result.level1_issues.extend(_check_dynamics_errors(results_dir, ctx=ctx))
         result.level1_issues.extend(_check_inp_file_quality(inp_file, ctx=ctx))
+        result.level1_issues = normalize_issues(result.level1_issues)
 
         # ========== Level 2: 参考案例对比（无条件执行）==========
         ref_result = _check_reference_cases(results_dir, inp_file, ctx=ctx)
-        result.level2_issues = ref_result["issues"]
+        result.level2_issues = normalize_issues(ref_result["issues"])
         result.similar_cases = ref_result["similar_cases"]
 
         # ========== Level 3: AI 深度分析（仅当规则层发现真实问题时才调用）==========
@@ -2118,18 +2287,53 @@ def _run_ai_diagnosis(
             for i in all_issues
         ]
 
-        prompt_text = make_diagnose_prompt(issue_dicts, stderr_snippets)
+        physical_data = _get_physical_data(results_dir, inp_file, ctx=ctx)
+        stderr_summary = _get_stderr_summary(results_dir, ctx=ctx)
+        prompt_text = make_diagnose_prompt_v2(
+            issue_dicts,
+            stderr_snippets,
+            physical_data=physical_data,
+            stderr_summary=stderr_summary,
+            similar_cases=similar_cases,
+        )
 
         if stream:
             handler = StreamHandler()
             tokens = client.complete_streaming(prompt_text)
-            return handler.stream_tokens(tokens)
+            return validate_ai_output(handler.stream_tokens(tokens))
         else:
-            return client.complete(prompt_text)
+            return validate_ai_output(client.complete(prompt_text))
 
     except Exception as e:
         log.warning("AI 诊断失败: %s", e)
         return None
+
+
+def strip_code_blocks(text: str) -> str:
+    """Remove fenced code blocks from AI output."""
+    return re.sub(r"```[\s\S]*?```", "", text)
+
+
+def validate_ai_output(text: str) -> str:
+    """Remove invalid CalculiX syntax from AI output and add a warning."""
+    if not text:
+        return text
+
+    if not any(re.search(pattern, text, re.IGNORECASE) for pattern in INVALID_SYNTAX_PATTERNS):
+        return text
+
+    sanitized = strip_code_blocks(text)
+    sanitized_lines: list[str] = []
+    for line in sanitized.splitlines():
+        if any(re.search(pattern, line, re.IGNORECASE) for pattern in INVALID_SYNTAX_PATTERNS):
+            continue
+        sanitized_lines.append(line)
+
+    sanitized = "\n".join(sanitized_lines).strip()
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+    if sanitized:
+        return f"{sanitized}\n\n{AI_OUTPUT_SYNTAX_WARNING}"
+    return AI_OUTPUT_SYNTAX_WARNING
 
 
 def _get_physical_data(

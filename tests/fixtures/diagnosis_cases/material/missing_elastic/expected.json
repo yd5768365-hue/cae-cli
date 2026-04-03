@@ -1,0 +1,12 @@
+{
+  "case_id": "material/missing_elastic",
+  "title": "Material missing elastic constants",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "material"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "Missing *ELASTIC under a material block."
+}

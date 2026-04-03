@@ -1,0 +1,2 @@
+WARNING: negative jacobian detected in element 1
+element quality is poor

@@ -1,0 +1,2 @@
+WARNING: displacement appears three orders of magnitude smaller than expected
+material stiffness may be in Pa while geometry uses mm

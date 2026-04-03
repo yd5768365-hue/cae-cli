@@ -1,0 +1,12 @@
+{
+  "case_id": "boundary/missing_boundary",
+  "title": "Boundary condition missing",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "boundary_condition"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "No active boundary cards are present."
+}

@@ -1,0 +1,12 @@
+{
+  "case_id": "load/zero_load_vector",
+  "title": "Zero load vector",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "load_transfer"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "Common load-transfer failure for coupling plus ineffective load."
+}

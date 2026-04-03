@@ -1,0 +1,2 @@
+ERROR: no elastic constants were assigned to material STEEL
+*ERROR in material definition

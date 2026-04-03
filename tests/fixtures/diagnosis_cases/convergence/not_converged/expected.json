@@ -1,0 +1,12 @@
+{
+  "case_id": "convergence/not_converged",
+  "title": "Static step non-convergence",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "convergence"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "Classic increment reduction failure."
+}

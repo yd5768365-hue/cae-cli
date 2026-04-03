@@ -1,0 +1,12 @@
+{
+  "case_id": "mesh/distorted_elements",
+  "title": "Distorted or inverted element",
+  "source_type": "synthetic",
+  "expected_issue_keys": [
+    "element_quality"
+  ],
+  "expected_severities": [
+    "error"
+  ],
+  "notes": "Negative Jacobian or severe distortion should land in element quality diagnostics."
+}

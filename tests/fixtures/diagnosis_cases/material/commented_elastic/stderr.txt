@@ -1,0 +1,2 @@
+WARNING: material ALLOY has no elastic definition in active cards
+ERROR: no elastic constants defined for material ALLOY

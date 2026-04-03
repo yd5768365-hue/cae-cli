@@ -1,0 +1,12 @@
+{
+  "case_id": "contact/missing_surface_behavior",
+  "title": "Missing contact interaction behavior",
+  "source_type": "self_made",
+  "expected_issue_keys": [
+    "contact"
+  ],
+  "expected_severities": [
+    "warning"
+  ],
+  "notes": "Surface behavior is commented out and should be surfaced as a contact issue."
+}

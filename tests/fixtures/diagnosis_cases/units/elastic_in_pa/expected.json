@@ -1,0 +1,12 @@
+{
+  "case_id": "units/elastic_in_pa",
+  "title": "Elastic modulus likely in Pa",
+  "source_type": "self_made",
+  "expected_issue_keys": [
+    "unit_consistency"
+  ],
+  "expected_severities": [
+    "warning"
+  ],
+  "notes": "Elastic modulus in Pa with mm-based geometry should be flagged as a unit mismatch risk."
+}

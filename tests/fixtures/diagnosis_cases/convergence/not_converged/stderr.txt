@@ -1,0 +1,3 @@
+WARNING: too many attempts made for this increment
+ERROR: increment size smaller than minimum
+job finished with nonconvergence
