@@ -1,31 +1,33 @@
 # diagnose.py
 """
-三层次诊断系统
+娑撳鐪板▎陇鐦栭弬顓犻兇缂?
 
-Level 1: 规则检测（无条件执行）
-  - 收敛性：stderr 含 *ERROR 或 returncode != 0
-  - 单元质量：Jacobian 负值、Hourglass、沙漏模式
-  - 网格质量：节点/单元比例异常
-  - 应力集中：应力梯度突变 > 50x
-  - 位移范围：最大位移 > 模型尺寸 10%
-  - 大变形：大应变分量 > 0.1 且无 NLGEOM → 建议启用几何非线性
-  - 刚体模式：位移非零但应力接近零 → 欠约束
-  - 材料屈服：最大应力超过屈服强度
-  - 单位一致性：应力量级异常（< 1 Pa 或 > 1 TPa，或 E/应力单位不匹配）
+Level 1: 鐟欏嫬鍨Λ鈧ù瀣剁礄閺冪姵娼禒鑸靛⒔鐞涘矉绱?
+  - 閺€鑸垫殐閹嶇窗stderr 閸?*ERROR 閹?returncode != 0
+  - 閸楁洖鍘撶拹銊╁櫤閿涙acobian 鐠愮喎鈧鈧笭ourglass閵嗕焦鐭欏蹇斈佸?
+  - 缂冩垶鐗哥拹銊╁櫤閿涙俺濡悙?閸楁洖鍘撳В鏂剧伐瀵倸鐖?
+  - 鎼存柨濮忛梿鍡曡厬閿涙艾绨查崝娑欘潽鎼达妇鐛婇崣?> 50x
+  - 娴ｅ秶些閼煎啫娲块敍姘付婢堆傜秴缁?> 濡€崇€风亸鍝勵嚟 10%
+  - 婢堆冨綁瑜邦澁绱版径褍绨查崣妯哄瀻闁?> 0.1 娑撴梹妫?NLGEOM 閳?瀵ら缚顔呴崥顖滄暏閸戠姳缍嶉棃鐐靛殠閹?
+  - 閸掓矮缍嬪Ο鈥崇础閿涙矮缍呯粔濠氭姜闂嗘湹绲炬惔鏂垮閹恒儴绻庨梿?閳?濞嗙姷瀹抽弶?
+  - 閺夋劖鏋＄仦鍫熸箛閿涙碍娓舵径褍绨查崝娑滅Т鏉╁洤鐪婚張宥呭繁鎼?
+  - 閸楁洑缍呮稉鈧懛瀛樷偓褝绱版惔鏂垮闁插繒楠囧鍌氱埗閿? 1 Pa 閹?> 1 TPa閿涘本鍨?E/鎼存柨濮忛崡鏇氱秴娑撳秴灏柊宥忕礆
 
-Level 2: 参考案例对比（无条件执行）
-  - 从 638 个官方测试集找相似案例
-  - 对比用户结果的位移/应力是否在同类案例合理范围内
+Level 2: 閸欏倽鈧啯顢嶆笟瀣嚠濮ｆ棑绱欓弮鐘虫蒋娴犺埖澧界悰宀嬬礆
+  - 娴?638 娑擃亜鐣奸弬瑙勭ゴ鐠囨洟娉﹂幍鍓ф祲娴煎吋顢嶆笟?
+  - 鐎佃鐦悽銊﹀煕缂佹挻鐏夐惃鍕秴缁?鎼存柨濮忛弰顖氭儊閸︺劌鎮撶猾缁橆攳娓氬鎮庨悶鍡氬瘱閸ユ潙鍞?
 
-Level 3: AI 深度分析（可选，需安装 ai 插件）
-  - 结合规则检测 + 参考案例对比结果
-  - 给出具体的修复建议
+Level 3: AI 濞ｅ崬瀹抽崚鍡樼€介敍鍫濆讲闁绱濋棁鈧€瑰顥?ai 閹绘帊娆㈤敍?
+  - 缂佹挸鎮庣憴鍕灟濡偓濞?+ 閸欏倽鈧啯顢嶆笟瀣嚠濮ｆ梻绮ㄩ弸?
+  - 缂佹瑥鍤崗铚傜秼閻ㄥ嫪鎱ㄦ径宥呯紦鐠?
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -44,7 +46,7 @@ DIAGNOSE_RESULT_NAMES = {"DISP", "STRESS", "TOSTRAIN"}
 _FRD_PREFIX_WIDTH = 13
 _FRD_VALUE_WIDTH = 12
 
-# 参考案例库路径
+# 閸欏倽鈧啯顢嶆笟瀣氨鐠侯垰绶?
 REFERENCE_CASES_PATH = Path(__file__).parent / "data" / "reference_cases.json"
 SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 CATEGORY_TITLES = {
@@ -95,18 +97,70 @@ INVALID_SYNTAX_PATTERNS = [
     r"DLOAD\s+\d+\s+\d+",
     r"at\s+node\s+\d+",
 ]
+AI_MAX_ISSUES = 12
+AI_MAX_SNIPPETS = 12
+AI_SNIPPET_CONTEXT_RADIUS = 2
+AI_MAX_ISSUES_PER_CATEGORY = 3
+ISSUE_TOKEN_STOPWORDS = {
+    "with",
+    "from",
+    "that",
+    "this",
+    "were",
+    "have",
+    "has",
+    "been",
+    "into",
+    "while",
+    "where",
+    "when",
+    "your",
+    "there",
+    "cannot",
+    "could",
+    "would",
+    "should",
+    "error",
+    "warning",
+    "issue",
+    "detected",
+    "possible",
+    "check",
+    "model",
+    "results",
+    "likely",
+}
+ISSUE_KEYWORDS_BY_CATEGORY = {
+    "convergence": ["not converged", "converge", "divergence", "increment size"],
+    "material": ["elastic", "density", "material", "conductivity", "specific heat"],
+    "input_syntax": ["unknown keyword", "cannot be interpreted", "syntax error"],
+    "element_quality": ["jacobian", "hourglass", "distorted element", "aspect ratio"],
+    "mesh_quality": ["jacobian", "distorted element", "skewness", "aspect ratio"],
+    "load_transfer": ["rhs only consists of 0.0", "concentrated loads"],
+    "boundary_condition": ["zero pivot", "singular matrix", "underconstrained", "overconstrained"],
+    "contact": ["contact", "slave surface", "master surface", "overclosure", "tied mpc"],
+    "file_io": ["could not open file", "file name", "could not open"],
+    "user_element": ["user element", "umat", "user subroutine"],
+    "limit_exceeded": ["increase nmpc", "increase nboun", "increase nk", "increase the dimension"],
+    "dynamics": ["eigenvalue", "modal dynamic", "cyclic symmetric"],
+}
 AI_OUTPUT_SYNTAX_WARNING = (
-    "注意：AI 生成的代码片段已被移除，请参考 CalculiX 文档确认正确语法。"
+    "Warning: invalid AI-generated syntax snippets were removed. "
+    "Please verify syntax against CalculiX documentation."
 )
 
 
 @dataclass
 class DiagnosticIssue:
-    """诊断问题条目。"""
+    """鐠囧﹥鏌囬梻顕€顣介弶锛勬窗閵?"""
     severity: str  # "error" | "warning" | "info"
     category: str  # "convergence" | "mesh_quality" | "stress_concentration" | "displacement" | "reference_comparison"
     message: str
     location: Optional[str] = None
+    evidence_line: Optional[str] = None
+    evidence_score: Optional[float] = None
+    evidence_support_count: Optional[int] = None
+    evidence_conflict: Optional[str] = None
     suggestion: Optional[str] = None
     priority: Optional[int] = None
     auto_fixable: Optional[bool] = None
@@ -126,17 +180,18 @@ class DiagnosticIssue:
 
 @dataclass
 class DiagnoseResult:
-    """诊断结果。"""
+    """鐠囧﹥鏌囩紒鎾寸亯閵?"""
     success: bool
-    level1_issues: list[DiagnosticIssue] = field(default_factory=list)  # 规则检测
-    level2_issues: list[DiagnosticIssue] = field(default_factory=list)  # 参考案例对比
-    level3_diagnosis: Optional[str] = None  # AI 诊断
-    similar_cases: list[dict] = field(default_factory=list)  # 相似案例
+    level1_issues: list[DiagnosticIssue] = field(default_factory=list)  # 鐟欏嫬鍨Λ鈧ù?
+    level2_issues: list[DiagnosticIssue] = field(default_factory=list)  # 閸欏倽鈧啯顢嶆笟瀣嚠濮?
+    level3_diagnosis: Optional[str] = None  # AI 鐠囧﹥鏌?
+    similar_cases: list[dict] = field(default_factory=list)  # 闁烩晠鏅查幎鈧俊妤€鐗呯欢?
+    convergence_metrics: list[dict] = field(default_factory=list)
     error: Optional[str] = None
 
     @property
     def issues(self) -> list[DiagnosticIssue]:
-        """所有问题的合并列表。"""
+        """閹碘偓閺堝妫舵０妯兼畱閸氬牆鑻熼崚妤勩€冮妴?"""
         return normalize_issues(self.level1_issues + self.level2_issues)
 
     @property
@@ -180,6 +235,8 @@ class DiagnosisContext:
     frd_summary_loaded: bool = field(default=False, repr=False)
     frd_stats: Optional[dict] = field(default=None, repr=False)
     frd_stats_loaded: bool = field(default=False, repr=False)
+    convergence_metrics: list[dict] = field(default_factory=list, repr=False)
+    convergence_metrics_loaded: bool = field(default=False, repr=False)
     yield_strength_cache: dict[Path, Optional[float]] = field(default_factory=dict, repr=False)
 
 
@@ -232,6 +289,112 @@ def _infer_auto_fixable(issue: DiagnosticIssue) -> bool:
     return False
 
 
+def _clamp_evidence_score(score: float) -> float:
+    return max(0.0, min(1.0, score))
+
+
+EVIDENCE_CONFLICT_PENALTY = 0.30
+EVIDENCE_GUARDRAILS_PATH = Path(__file__).parent / "data" / "evidence_guardrails.json"
+DEFAULT_EVIDENCE_GUARDRAILS_BY_CATEGORY: dict[str, dict[str, float]] = {
+    "convergence": {"min_support": 2, "min_score": 0.72, "score_penalty": 0.15},
+    "boundary_condition": {"min_support": 2, "min_score": 0.70, "score_penalty": 0.12},
+    "contact": {"min_support": 2, "min_score": 0.72, "score_penalty": 0.12},
+    "dynamics": {"min_support": 2, "min_score": 0.70, "score_penalty": 0.12},
+    "load_transfer": {"min_support": 2, "min_score": 0.68, "score_penalty": 0.10},
+    "input_syntax": {"min_support": 1, "min_score": 0.45, "score_penalty": 0.06},
+    "material": {"min_support": 1, "min_score": 0.45, "score_penalty": 0.06},
+}
+
+
+def _validate_guardrail_entry(entry: dict) -> Optional[dict[str, float]]:
+    try:
+        min_support = max(1, int(entry.get("min_support", 1)))
+        min_score = _clamp_evidence_score(float(entry.get("min_score", 0.0)))
+        score_penalty = _clamp_evidence_score(float(entry.get("score_penalty", 0.1)))
+    except (TypeError, ValueError):
+        return None
+
+    return {
+        "min_support": float(min_support),
+        "min_score": float(min_score),
+        "score_penalty": float(score_penalty),
+    }
+
+
+@lru_cache(maxsize=16)
+def _get_evidence_guardrails(config_path_override: str = "") -> dict[str, dict[str, float]]:
+    merged = {
+        category: dict(config)
+        for category, config in DEFAULT_EVIDENCE_GUARDRAILS_BY_CATEGORY.items()
+    }
+
+    raw_path = config_path_override.strip()
+    if not raw_path:
+        raw_path = (os.getenv("CAE_EVIDENCE_GUARDRAILS_PATH") or "").strip()
+    config_path = Path(raw_path) if raw_path else EVIDENCE_GUARDRAILS_PATH
+    if not config_path.exists():
+        return merged
+
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Failed to load evidence guardrails config %s: %s", config_path, exc)
+        return merged
+
+    if not isinstance(loaded, dict):
+        log.warning("Invalid evidence guardrails config format: %s", config_path)
+        return merged
+
+    for category, raw_entry in loaded.items():
+        if not isinstance(category, str) or not isinstance(raw_entry, dict):
+            continue
+        validated = _validate_guardrail_entry(raw_entry)
+        if validated is None:
+            continue
+        merged[category] = validated
+
+    return merged
+
+
+def _apply_evidence_conflict_penalty(
+    score: float,
+    issue: DiagnosticIssue,
+) -> float:
+    if issue.evidence_conflict and issue.evidence_conflict.strip():
+        return _clamp_evidence_score(score - EVIDENCE_CONFLICT_PENALTY)
+    return _clamp_evidence_score(score)
+
+
+def _infer_evidence_score(issue: DiagnosticIssue) -> float:
+    if issue.evidence_score is not None:
+        return round(_clamp_evidence_score(float(issue.evidence_score)), 2)
+
+    score = 0.2
+    if issue.location and issue.location.strip():
+        score += 0.15
+        hinted_file, hinted_line = _parse_issue_location_hint(issue.location)
+        if hinted_file:
+            score += 0.05
+        if hinted_line is not None:
+            score += 0.1
+
+    if issue.evidence_line and issue.evidence_line.strip():
+        score += 0.45
+        if re.search(r":[0-9]+\s*:", issue.evidence_line):
+            score += 0.05
+
+    support_count = issue.evidence_support_count
+    if support_count is not None:
+        if support_count >= 2:
+            score += 0.10
+        if support_count >= 3:
+            score += 0.05
+        if support_count <= 1 and issue.severity == "error":
+            score -= 0.05
+
+    return round(_apply_evidence_conflict_penalty(score, issue), 2)
+
+
 def _should_replace_issue(current: DiagnosticIssue, candidate: DiagnosticIssue) -> bool:
     current_rank = SEVERITY_ORDER.get(current.severity, 2)
     candidate_rank = SEVERITY_ORDER.get(candidate.severity, 2)
@@ -248,6 +411,26 @@ def _should_replace_issue(current: DiagnosticIssue, candidate: DiagnosticIssue) 
     if candidate_priority != current_priority:
         return candidate_priority < current_priority
 
+    current_has_evidence = bool((current.evidence_line or "").strip())
+    candidate_has_evidence = bool((candidate.evidence_line or "").strip())
+    if candidate_has_evidence != current_has_evidence:
+        return candidate_has_evidence
+
+    current_has_conflict = bool((current.evidence_conflict or "").strip())
+    candidate_has_conflict = bool((candidate.evidence_conflict or "").strip())
+    if candidate_has_conflict != current_has_conflict:
+        return not candidate_has_conflict
+
+    current_support = current.evidence_support_count or 0
+    candidate_support = candidate.evidence_support_count or 0
+    if candidate_support != current_support:
+        return candidate_support > current_support
+
+    current_evidence_score = _infer_evidence_score(current)
+    candidate_evidence_score = _infer_evidence_score(candidate)
+    if candidate_evidence_score != current_evidence_score:
+        return candidate_evidence_score > current_evidence_score
+
     current_has_location = bool((current.location or "").strip())
     candidate_has_location = bool((candidate.location or "").strip())
     return candidate_has_location and not current_has_location
@@ -261,6 +444,10 @@ def normalize_issues(issues: list[DiagnosticIssue]) -> list[DiagnosticIssue]:
             category=issue.category,
             message=issue.message.strip(),
             location=issue.location.strip() if issue.location else None,
+            evidence_line=issue.evidence_line.strip() if issue.evidence_line else None,
+            evidence_score=_infer_evidence_score(issue),
+            evidence_support_count=issue.evidence_support_count,
+            evidence_conflict=issue.evidence_conflict.strip() if issue.evidence_conflict else None,
             suggestion=issue.suggestion.strip() if issue.suggestion else None,
             priority=_infer_priority(issue),
             auto_fixable=_infer_auto_fixable(issue),
@@ -275,6 +462,7 @@ def normalize_issues(issues: list[DiagnosticIssue]) -> list[DiagnosticIssue]:
         key=lambda issue: (
             SEVERITY_ORDER.get(issue.severity, 2),
             issue.priority if issue.priority is not None else 99,
+            -_infer_evidence_score(issue),
             issue.category,
             _normalize_text_key(issue.message),
         ),
@@ -287,6 +475,10 @@ def build_diagnosis_summary(issues: list[DiagnosticIssue]) -> dict:
     warnings = [issue for issue in normalized if issue.severity == "warning"]
     auto_fixable = [issue for issue in normalized if issue.auto_fixable]
     top_issue = normalized[0] if normalized else None
+    by_category = dict(Counter(issue.category for issue in normalized))
+    by_severity = dict(Counter(issue.severity for issue in normalized))
+    action_items = [issue.action for issue in normalized if issue.action][:3]
+    risk_score = min(100, len(errors) * 30 + len(warnings) * 10 + len(normalized) * 2)
     return {
         "total": len(normalized),
         "error_count": len(errors),
@@ -294,7 +486,436 @@ def build_diagnosis_summary(issues: list[DiagnosticIssue]) -> dict:
         "auto_fixable_count": len(auto_fixable),
         "top_issue": top_issue,
         "first_action": top_issue.action if top_issue else "",
+        "by_category": by_category,
+        "by_severity": by_severity,
+        "risk_score": risk_score,
+        "action_items": action_items,
     }
+
+
+def issue_to_dict(issue: DiagnosticIssue) -> dict:
+    return {
+        "severity": issue.severity,
+        "category": issue.category,
+        "title": issue.title,
+        "message": issue.message,
+        "location": issue.location,
+        "evidence_line": issue.evidence_line,
+        "evidence_score": _infer_evidence_score(issue),
+        "evidence_support_count": issue.evidence_support_count,
+        "evidence_conflict": issue.evidence_conflict,
+        "suggestion": issue.suggestion,
+        "priority": issue.priority,
+        "auto_fixable": bool(issue.auto_fixable),
+    }
+
+
+def _summarize_convergence_metrics(
+    metrics: list[dict],
+    *,
+    issues: Optional[list[DiagnosticIssue]] = None,
+) -> dict:
+    max_iterations = max((item.get("max_iter") or 0 for item in metrics), default=0)
+    worst_residual = max(
+        (item.get("final_residual") for item in metrics if item.get("final_residual") is not None),
+        default=None,
+    )
+    residual_trends = Counter(
+        item.get("residual_trend")
+        for item in metrics
+        if item.get("residual_trend")
+    )
+    increment_trends = Counter(
+        item.get("increment_trend")
+        for item in metrics
+        if item.get("increment_trend")
+    )
+    issue_list = issues or []
+    has_convergence_issue = any(issue.category == "convergence" for issue in issue_list)
+    has_not_converged_status = any(
+        (item.get("status") or "").upper() == "NOT CONVERGED"
+        for item in metrics
+    )
+
+    return {
+        "file_count": len(metrics),
+        "has_not_converged": has_not_converged_status or has_convergence_issue,
+        "max_iterations": max_iterations if max_iterations > 0 else None,
+        "worst_final_residual": worst_residual,
+        "residual_trend_counts": dict(residual_trends),
+        "increment_trend_counts": dict(increment_trends),
+    }
+
+
+def diagnosis_result_to_dict(
+    result: DiagnoseResult,
+    *,
+    results_dir: Optional[Path] = None,
+    inp_file: Optional[Path] = None,
+    ai_enabled: Optional[bool] = None,
+) -> dict:
+    summary = build_diagnosis_summary(result.issues)
+    top_issue = summary.get("top_issue")
+    summary_export = dict(summary)
+    summary_export["top_issue"] = issue_to_dict(top_issue) if isinstance(top_issue, DiagnosticIssue) else None
+    convergence_files = [dict(item) for item in result.convergence_metrics]
+    if not convergence_files and results_dir is not None and results_dir.exists():
+        convergence_files = _extract_convergence_metrics(results_dir)
+    convergence_summary = _summarize_convergence_metrics(
+        convergence_files,
+        issues=result.issues,
+    )
+
+    return {
+        "success": result.success,
+        "error": result.error,
+        "issue_count": result.issue_count,
+        "summary": summary_export,
+        "issues": [issue_to_dict(issue) for issue in result.issues],
+        "level1_issues": [issue_to_dict(issue) for issue in result.level1_issues],
+        "level2_issues": [issue_to_dict(issue) for issue in result.level2_issues],
+        "ai_diagnosis": result.level3_diagnosis,
+        "similar_cases": [dict(case) for case in result.similar_cases],
+        "convergence": {
+            "summary": convergence_summary,
+            "files": convergence_files,
+        },
+        "meta": {
+            "results_dir": str(results_dir) if results_dir is not None else None,
+            "inp_file": str(inp_file) if inp_file is not None else None,
+            "ai_enabled": ai_enabled,
+        },
+    }
+
+
+def _pick_ai_issues(level1_issues: list[DiagnosticIssue], level2_issues: list[DiagnosticIssue]) -> list[DiagnosticIssue]:
+    merged = normalize_issues(level1_issues + level2_issues)
+    if len(merged) <= AI_MAX_ISSUES:
+        return merged
+
+    # Round-robin by category keeps diagnosis evidence diverse.
+    by_category: dict[str, list[DiagnosticIssue]] = {}
+    for issue in merged:
+        by_category.setdefault(issue.category, []).append(issue)
+
+    selected: list[DiagnosticIssue] = []
+
+    # First pass: one issue per category.
+    for category, issues in by_category.items():
+        if not issues:
+            continue
+        selected.append(issues.pop(0))
+        if len(selected) >= AI_MAX_ISSUES:
+            return selected
+
+    # Second pass: fill remaining slots with per-category cap.
+    counts = Counter(issue.category for issue in selected)
+    while len(selected) < AI_MAX_ISSUES:
+        progress = False
+        for category, issues in by_category.items():
+            if not issues:
+                continue
+            if counts[category] >= AI_MAX_ISSUES_PER_CATEGORY:
+                continue
+            selected.append(issues.pop(0))
+            counts[category] += 1
+            progress = True
+            if len(selected) >= AI_MAX_ISSUES:
+                break
+        if not progress:
+            break
+
+    return selected[:AI_MAX_ISSUES]
+
+
+def _issue_keywords(issue: DiagnosticIssue) -> list[str]:
+    keywords: list[str] = []
+    keywords.extend(ISSUE_KEYWORDS_BY_CATEGORY.get(issue.category, []))
+
+    text = _normalize_text_key(f"{issue.message} {issue.suggestion or ''}")
+    for token in text.split():
+        if len(token) < 4 or token.isdigit() or token in ISSUE_TOKEN_STOPWORDS:
+            continue
+        keywords.append(token)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for kw in keywords:
+        if kw not in seen:
+            seen.add(kw)
+            deduped.append(kw)
+    return deduped[:10]
+
+
+def _parse_issue_location_hint(location: Optional[str]) -> tuple[Optional[str], Optional[int]]:
+    if not location:
+        return None, None
+
+    colon_match = re.search(r"([^\s:]+\.[A-Za-z0-9_]+):(\d+)", location)
+    if colon_match:
+        return colon_match.group(1), int(colon_match.group(2))
+
+    line_match = re.search(
+        r"([^\s]+)\s*(?:line|绗?\s*(\d+)(?:琛??",
+        location,
+        re.IGNORECASE,
+    )
+    if line_match:
+        return line_match.group(1), int(line_match.group(2))
+
+    file_match = re.search(r"([^\s]+?\.[A-Za-z0-9_]+)", location)
+    if file_match:
+        return file_match.group(1), None
+
+    return None, None
+
+def _build_issue_evidence_sources(
+    results_dir: Path,
+    *,
+    inp_file: Optional[Path] = None,
+    ctx: Optional[DiagnosisContext] = None,
+) -> list[tuple[str, list[str]]]:
+    sources: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+
+    for pattern in ("*.stderr", "*.sta", "*.dat", "*.cvg"):
+        for path in _glob_cached(results_dir, pattern, ctx=ctx):
+            key = str(path.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                sources.append((path.name, _read_lines_cached(path, ctx=ctx)))
+            except OSError:
+                continue
+
+    if inp_file and inp_file.exists():
+        key = str(inp_file.resolve()).lower()
+        if key not in seen:
+            try:
+                sources.append((inp_file.name, _read_lines_cached(inp_file, ctx=ctx)))
+            except OSError:
+                pass
+
+    return sources
+
+
+def _format_evidence_line(file_name: str, line_no: int, raw_line: str) -> str:
+    excerpt = raw_line.strip()
+    if len(excerpt) > 220:
+        excerpt = excerpt[:217] + "..."
+    return f"{file_name}:{line_no}: {excerpt}"
+
+
+def _find_best_evidence_line(
+    lines: list[str],
+    keywords: list[str],
+) -> Optional[tuple[int, str, int, int]]:
+    best_idx = -1
+    best_score = 0
+
+    lowered_keywords = [kw.lower() for kw in keywords if kw]
+    unique_keywords = list(dict.fromkeys(lowered_keywords))
+    for idx, line in enumerate(lines, 1):
+        lowered = line.lower()
+        if not lowered.strip():
+            continue
+        score = sum(1 for kw in unique_keywords if kw in lowered)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    if best_idx <= 0:
+        return None
+    return best_idx, lines[best_idx - 1], best_score, max(1, len(unique_keywords))
+
+
+def _count_supporting_sources(
+    sources: list[tuple[str, list[str]]],
+    keywords: list[str],
+) -> int:
+    lowered_keywords = [kw.lower() for kw in keywords if kw]
+    if not lowered_keywords:
+        return 0
+
+    support = 0
+    for _, src_lines in sources:
+        found = False
+        for raw in src_lines:
+            lowered = raw.lower()
+            if any(kw in lowered for kw in lowered_keywords):
+                found = True
+                break
+        if found:
+            support += 1
+    return support
+
+
+def _attach_issue_evidence(
+    results_dir: Path,
+    issues: list[DiagnosticIssue],
+    *,
+    inp_file: Optional[Path] = None,
+    ctx: Optional[DiagnosisContext] = None,
+) -> list[DiagnosticIssue]:
+    if not issues:
+        return issues
+
+    sources = _build_issue_evidence_sources(results_dir, inp_file=inp_file, ctx=ctx)
+    if not sources:
+        return issues
+
+    by_name: dict[str, tuple[str, list[str]]] = {
+        name.lower(): (name, lines)
+        for name, lines in sources
+    }
+
+    for issue in issues:
+        keywords = _issue_keywords(issue)
+        if issue.category == "convergence":
+            keywords.extend(["resid", "increment size", "not converged", "diverg"])
+        issue.evidence_support_count = _count_supporting_sources(sources, keywords)
+
+        if issue.evidence_line:
+            if issue.evidence_score is None:
+                issue.evidence_score = _infer_evidence_score(issue)
+            continue
+
+        hinted_file, hinted_line = _parse_issue_location_hint(issue.location)
+        if hinted_file:
+            source = by_name.get(hinted_file.lower())
+            if source:
+                src_name, src_lines = source
+                if hinted_line is not None and 1 <= hinted_line <= len(src_lines):
+                    issue.evidence_line = _format_evidence_line(
+                        src_name,
+                        hinted_line,
+                        src_lines[hinted_line - 1],
+                    )
+                    issue.evidence_support_count = max(
+                        issue.evidence_support_count or 0,
+                        1,
+                    )
+                    issue.evidence_score = round(
+                        _apply_evidence_conflict_penalty(0.98, issue),
+                        2,
+                    )
+                    continue
+
+        if not keywords:
+            continue
+
+        candidate_sources = sources
+        if hinted_file:
+            source = by_name.get(hinted_file.lower())
+            if source:
+                candidate_sources = [source] + [item for item in sources if item[0].lower() != hinted_file.lower()]
+
+        for src_name, src_lines in candidate_sources:
+            matched = _find_best_evidence_line(src_lines, keywords)
+            if matched is None:
+                continue
+            line_no, raw_line, hit_count, keyword_total = matched
+            issue.evidence_line = _format_evidence_line(src_name, line_no, raw_line)
+            issue.evidence_support_count = max(issue.evidence_support_count or 0, 1)
+            match_ratio = hit_count / max(1, keyword_total)
+            issue.evidence_score = round(
+                _apply_evidence_conflict_penalty(0.55 + 0.4 * match_ratio, issue),
+                2,
+            )
+            break
+
+        if issue.evidence_score is None:
+            issue.evidence_score = _infer_evidence_score(issue)
+
+    return issues
+
+
+def _build_ai_evidence_digest(
+    issues: list[DiagnosticIssue],
+    similar_cases: list[dict],
+    *,
+    stderr_snippets: str = "",
+    physical_data: str = "",
+    stderr_summary: str = "",
+    convergence_summary: Optional[dict] = None,
+) -> str:
+    if not issues and not similar_cases:
+        return ""
+
+    evidence_flags = {
+        "issues": bool(issues),
+        "stderr_snippets": bool((stderr_snippets or "").strip()),
+        "physical_data": bool((physical_data or "").strip()),
+        "stderr_summary": bool((stderr_summary or "").strip()),
+        "similar_cases": bool(similar_cases),
+    }
+    evidence_score = round(sum(1 for ok in evidence_flags.values() if ok) * 100 / len(evidence_flags))
+    missing = [name for name, ok in evidence_flags.items() if not ok]
+
+    lines: list[str] = []
+    lines.append(f"Evidence coverage: {evidence_score}%")
+    if missing:
+        lines.append("Missing evidence: " + ", ".join(missing))
+
+    if issues:
+        severity_counter = Counter(issue.severity for issue in issues)
+        category_counter = Counter(issue.category for issue in issues)
+        top_categories = ", ".join(f"{name}:{count}" for name, count in category_counter.most_common(4))
+        lines.append(
+            "Issues: "
+            f"total={len(issues)}, "
+            f"errors={severity_counter.get('error', 0)}, "
+            f"warnings={severity_counter.get('warning', 0)}, "
+            f"categories={top_categories or 'none'}"
+        )
+        first_actions = [issue.action for issue in issues if issue.action][:3]
+        if first_actions:
+            lines.append("Top actions: " + " | ".join(first_actions))
+
+    if similar_cases:
+        top_case = similar_cases[0]
+        lines.append(
+            "Best reference: "
+            f"{top_case.get('name', 'N/A')} "
+            f"(similarity={top_case.get('similarity_score', 'N/A')}%)"
+        )
+
+    if convergence_summary:
+        lines.append(
+            "Convergence: "
+            f"files={convergence_summary.get('file_count', 0)}, "
+            f"not_converged={convergence_summary.get('has_not_converged', False)}, "
+            f"max_iter={convergence_summary.get('max_iterations')}, "
+            f"worst_residual={convergence_summary.get('worst_final_residual')}"
+        )
+
+    return "\n".join(lines)
+
+
+def _build_rule_based_diagnosis(issues: list[DiagnosticIssue]) -> str:
+    """Generate deterministic fallback diagnosis when LLM output is unavailable."""
+    if not issues:
+        return "閺堫亜褰傞悳浼存付鐟?AI 濞ｅ崬瀹崇拠濠冩焽閻ㄥ嫰鏁婄拠顖樷偓?"
+
+    top_issues = normalize_issues(issues)[:3]
+    lines: list[str] = ["閺堚偓閸欘垵鍏橀弽鐟版礈閿?"]
+    for issue in top_issues:
+        lines.append(f"- [{issue.severity}] {issue.title}: {issue.cause}")
+
+    lines.append("")
+    lines.append("娣囶喖顦插楦款唴閿?")
+    for idx, issue in enumerate(top_issues, 1):
+        action = issue.action or "閹稿顕氶梻顕€顣界猾璇插焼闁劙銆嶅Λ鈧弻銉ㄧ翻閸忋儱宕遍悧鍥モ偓浣界珶閻ｅ苯鎷版潪鍊熷祹鐎规矮绠熼妴?"
+        lines.append(f"{idx}. {action}")
+
+    lines.append("")
+    lines.append("妤犲矁鐦夊銉╊€冮敍?")
+    lines.append("1. 闁插秵鏌婃潻鎰攽濮瑰倽袙楠炲墎鈥樼拋?stderr 娑撳秴鍟€閸戣櫣骞囬崥宀€琚崗鎶芥暛鐠囧秲鈧?")
+    lines.append("2. 濡偓閺?.sta 閺€鑸垫殐閻樿埖鈧椒绗屽▓瀣▕閺勵垰鎯侀弨鐟版澖閵?")
+    lines.append("3. 鐎佃鐦崗鎶芥暛娴ｅ秶些/鎼存柨濮忛弫浼村櫤缁狙勬Ц閸氾箑娲栭崚鏉挎値閻炲棜瀵栭崶娣偓?")
+
+    return "\n".join(lines)
 
 
 def _glob_cached(
@@ -694,7 +1315,7 @@ def _load_reference_case_db() -> Optional[CaseDatabase]:
     try:
         return CaseDatabase.from_json(REFERENCE_CASES_PATH)
     except Exception as exc:
-        log.warning("参考案例库加载失败: %s", exc)
+        log.warning("閸欏倽鈧啯顢嶆笟瀣氨閸旂姾娴囨径杈Е: %s", exc)
         return None
 
 
@@ -704,29 +1325,30 @@ def diagnose_results(
     inp_file: Optional[Path] = None,
     *,
     stream: bool = True,
+    guardrails_path: Optional[Path] = None,
 ) -> DiagnoseResult:
     """
-    三层次诊断。
+    娑撳鐪板▎陇鐦栭弬顓溾偓?
 
     Args:
-        results_dir: 包含 .frd / .sta / .dat 文件的目录
-        client: LLM 客户端（可选，不传或为 None 时跳过 Level 3）
-        inp_file: 输入的 .inp 文件路径（用于提取元数据进行案例匹配）
-        stream: 是否流式输出
+        results_dir: 閸栧懎鎯?.frd / .sta / .dat 閺傚洣娆㈤惃鍕窗瑜?
+        client: LLM 鐎广垺鍩涚粩顖ょ礄閸欘垶鈧绱濇稉宥勭炊閹存牔璐?None 閺冩儼鐑︽潻?Level 3閿?
+        inp_file: 鏉堟挸鍙嗛惃?.inp 閺傚洣娆㈢捄顖氱窞閿涘牏鏁ゆ禍搴㈠絹閸欐牕鍘撻弫鐗堝祦鏉╂稖顢戝鍫滅伐閸栧綊鍘ら敍?
+        stream: 閺勵垰鎯佸ù浣哥础鏉堟挸鍤?
 
     Returns:
         DiagnoseResult
     """
     result = DiagnoseResult(success=True)
 
-    # 确保 results_dir 是 Path 对象
+    # 绾喕绻?results_dir 閺?Path 鐎电钖?
     if isinstance(results_dir, str):
         results_dir = Path(results_dir)
 
     ctx = _build_context(results_dir, inp_file)
 
     try:
-        # ========== Level 1: 规则检测（无条件执行）==========
+        # ========== Level 1: 鐟欏嫬鍨Λ鈧ù瀣剁礄閺冪姵娼禒鑸靛⒔鐞涘矉绱?=========
         result.level1_issues.extend(_check_convergence(results_dir, ctx=ctx))
         result.level1_issues.extend(_check_time_increment_stagnation(results_dir, ctx=ctx))
         result.level1_issues.extend(_check_input_syntax(results_dir, ctx=ctx))
@@ -749,16 +1371,37 @@ def diagnose_results(
         result.level1_issues.extend(_check_dynamics_errors(results_dir, ctx=ctx))
         result.level1_issues.extend(_check_inp_file_quality(inp_file, ctx=ctx))
         result.level1_issues = normalize_issues(result.level1_issues)
+        result.level1_issues = _attach_issue_evidence(
+            results_dir,
+            result.level1_issues,
+            inp_file=inp_file,
+            ctx=ctx,
+        )
+        result.level1_issues = _apply_category_evidence_guardrails(
+            result.level1_issues,
+            guardrails_path=guardrails_path,
+        )
 
-        # ========== Level 2: 参考案例对比（无条件执行）==========
+        # ========== Level 2: 閸欏倽鈧啯顢嶆笟瀣嚠濮ｆ棑绱欓弮鐘虫蒋娴犺埖澧界悰宀嬬礆==========
         ref_result = _check_reference_cases(results_dir, inp_file, ctx=ctx)
         result.level2_issues = normalize_issues(ref_result["issues"])
+        result.level2_issues = _attach_issue_evidence(
+            results_dir,
+            result.level2_issues,
+            inp_file=inp_file,
+            ctx=ctx,
+        )
+        result.level2_issues = _apply_category_evidence_guardrails(
+            result.level2_issues,
+            guardrails_path=guardrails_path,
+        )
         result.similar_cases = ref_result["similar_cases"]
+        result.convergence_metrics = _get_convergence_metrics(results_dir, ctx=ctx)
 
-        # ========== Level 3: AI 深度分析（仅当规则层发现真实问题时才调用）==========
-        # 只有 level1 的 error/warning 才是真实问题，level2 的 info 参考信息不触发 LLM
+        # ========== Level 3: AI 濞ｅ崬瀹抽崚鍡樼€介敍鍫滅矌瑜版挸鐡ㄩ崷?error/warning 閺冩儼鐨熼悽顭掔礆==========
         real_issues = [
-            i for i in result.level1_issues
+            i
+            for i in normalize_issues(result.level1_issues + result.level2_issues)
             if i.severity in ("error", "warning")
         ]
         if not real_issues:
@@ -780,17 +1423,17 @@ def diagnose_results(
         result.error = str(exc)
     except Exception as exc:
         result.success = False
-        result.error = f"诊断失败: {exc}"
-        log.exception("诊断过程出错")
+        result.error = f"鐠囧﹥鏌囨径杈Е: {exc}"
+        log.exception("鐠囧﹥鏌囨潻鍥┾柤閸戞椽鏁?")
 
     return result
 
 
 # ------------------------------------------------------------------ #
-# Level 1: 规则检测函数
+# Level 1: 鐟欏嫬鍨Λ鈧ù瀣毐閺?
 # ------------------------------------------------------------------ #
 
-# Jacobian / Hourglass 检测模式（不区分大小写）
+# Jacobian / Hourglass 濡偓濞村膩瀵骏绱欐稉宥呭隘閸掑棗銇囩亸蹇撳晸閿?
 JACOBIAN_PATTERNS = [
     re.compile(r"negative jacobian", re.IGNORECASE),
     re.compile(r"hourglassing", re.IGNORECASE),
@@ -798,7 +1441,7 @@ JACOBIAN_PATTERNS = [
     re.compile(r"nonpositive jacobian", re.IGNORECASE),
 ]
 
-# 收敛性问题检测模式（增强自 calculix_patterns.txt）
+# 閺€鑸垫殐閹囨６妫版ɑ顥呭ù瀣佸蹇ョ礄婢х偛宸遍懛?calculix_patterns.txt閿?
 CONVERGENCE_PATTERNS = [
     re.compile(r"not\s+converged", re.IGNORECASE),
     re.compile(r"increment\s+size\s+smaller", re.IGNORECASE),
@@ -809,13 +1452,13 @@ CONVERGENCE_PATTERNS = [
     re.compile(r"ddebdf\s+did\s+not\s+converge", re.IGNORECASE),
 ]
 
-# 无效 INP 卡片检测模式
+# 閺冪姵鏅?INP 閸楋紕澧栧Λ鈧ù瀣佸?
 INVALID_CARD_PATTERNS = [
     re.compile(r"card image cannot be interpreted", re.IGNORECASE),
     re.compile(r"unknown keyword", re.IGNORECASE),
 ]
 
-# 材料缺失检测模式（来自 CalculiX 源码 528 模式）
+# 閺夋劖鏋＄紓鍝勩亼濡偓濞村膩瀵骏绱欓弶銉ㄥ殰 CalculiX 濠ф劗鐖?528 濡€崇础閿?
 MATERIAL_PATTERNS = [
     re.compile(r"no elastic constants", re.IGNORECASE),
     re.compile(r"no density was assigned", re.IGNORECASE),
@@ -834,12 +1477,12 @@ MATERIAL_PATTERNS = [
     re.compile(r"no orientation", re.IGNORECASE),
 ]
 
-# 参数不识别检测模式
+# 閸欏倹鏆熸稉宥堢槕閸掝偅顥呭ù瀣佸?
 PARAMETER_PATTERNS = [
     re.compile(r"parameter not recognized", re.IGNORECASE),
 ]
 
-# MPC/约束数量超限检测模式（来自 CalculiX 源码）
+# MPC/缁撅附娼弫浼村櫤鐡掑懘妾哄Λ鈧ù瀣佸蹇ョ礄閺夈儴鍤?CalculiX 濠ф劗鐖滈敍?
 MPC_LIMIT_PATTERNS = [
     re.compile(r"increase nmpc_", re.IGNORECASE),
     re.compile(r"increase nboun_", re.IGNORECASE),
@@ -854,21 +1497,21 @@ MPC_LIMIT_PATTERNS = [
     re.compile(r"increase the dimension", re.IGNORECASE),
 ]
 
-# 载荷传递问题检测模式
+# 鏉炲€熷祹娴肩娀鈧帡妫舵０妯活梾濞村膩瀵?
 LOAD_TRANSFER_PATTERNS = [
     re.compile(r"RHS only consists of 0\.0", re.IGNORECASE),
     re.compile(r"concentrated loads:\s*0\s*$", re.IGNORECASE | re.MULTILINE),
 ]
 
-# 边界条件问题检测模式
+# 鏉堝湱鏅弶鈥叉闂傤噣顣藉Λ鈧ù瀣佸?
 BOUNDARY_PATTERNS = [
     re.compile(r"zero pivot", re.IGNORECASE),
     re.compile(r"singular matrix", re.IGNORECASE),
-    re.compile(r"欠约束|underconstrained", re.IGNORECASE),
-    re.compile(r"过约束|overconstrained", re.IGNORECASE),
+    re.compile(r"濞嗙姷瀹抽弶鐒瞮nderconstrained", re.IGNORECASE),
+    re.compile(r"鏉╁洨瀹抽弶鐒瞣verconstrained", re.IGNORECASE),
 ]
 
-# 网格质量问题检测模式
+# 缂冩垶鐗哥拹銊╁櫤闂傤噣顣藉Λ鈧ù瀣佸?
 MESH_QUALITY_PATTERNS = [
     re.compile(r"negative.*jacobian", re.IGNORECASE),
     re.compile(r"distorted.*element", re.IGNORECASE),
@@ -877,7 +1520,7 @@ MESH_QUALITY_PATTERNS = [
     re.compile(r"aspect ratio", re.IGNORECASE),
 ]
 
-# 接触问题检测模式（增强自 calculix_patterns.txt）
+# 閹恒儴袝闂傤噣顣藉Λ鈧ù瀣佸蹇ョ礄婢х偛宸遍懛?calculix_patterns.txt閿?
 CONTACT_PATTERNS = [
     re.compile(r"contact.*not.*found", re.IGNORECASE),
     re.compile(r"overclosure", re.IGNORECASE),
@@ -889,11 +1532,11 @@ CONTACT_PATTERNS = [
     re.compile(r"slave node", re.IGNORECASE),
     re.compile(r"contact slave set", re.IGNORECASE),
     re.compile(r"no tied MPC", re.IGNORECASE),
-    re.compile(r"tied MPC", re.IGNORECASE),
+    re.compile(r"tied MPC.*(error|fail|not)", re.IGNORECASE),
     re.compile(r"contact.*adjust", re.IGNORECASE),
 ]
 
-# 文件 I/O 错误检测模式（来自 CalculiX 源码）
+# 閺傚洣娆?I/O 闁挎瑨顕ゅΛ鈧ù瀣佸蹇ョ礄閺夈儴鍤?CalculiX 濠ф劗鐖滈敍?
 FILE_IO_PATTERNS = [
     re.compile(r"could not open file", re.IGNORECASE),
     re.compile(r"file name is lacking", re.IGNORECASE),
@@ -904,7 +1547,7 @@ FILE_IO_PATTERNS = [
     re.compile(r"syntax error", re.IGNORECASE),
 ]
 
-# 用户单元/材料错误检测模式（来自 CalculiX 源码）
+# 閻劍鍩涢崡鏇炲帗/閺夋劖鏋￠柨娆掝嚖濡偓濞村膩瀵骏绱欓弶銉ㄥ殰 CalculiX 濠ф劗鐖滈敍?
 USER_ELEMENT_PATTERNS = [
     re.compile(r"user element", re.IGNORECASE),
     re.compile(r"umat", re.IGNORECASE),
@@ -912,15 +1555,185 @@ USER_ELEMENT_PATTERNS = [
     re.compile(r"user subroutine", re.IGNORECASE),
 ]
 
-# 动力学/模态分析错误模式（来自 CalculiX 源码）
+# 閸斻劌濮忕€?濡剝鈧礁鍨庨弸鎰版晩鐠囶垱膩瀵骏绱欓弶銉ㄥ殰 CalculiX 濠ф劗鐖滈敍?
 DYNAMICS_PATTERNS = [
-    re.compile(r"eigenvalue", re.IGNORECASE),
     re.compile(r"frequencies:.*less than 1 eigenvalue", re.IGNORECASE),
-    re.compile(r"modal dynamic", re.IGNORECASE),
-    re.compile(r"cyclic symmetric", re.IGNORECASE),
+    re.compile(r"eigenvalue.*(error|failed|cannot|not)", re.IGNORECASE),
+    re.compile(r"modal dynamic.*(error|failed|cannot|not)", re.IGNORECASE),
+    re.compile(r"cyclic symmetric.*(error|failed|cannot|not)", re.IGNORECASE),
     re.compile(r"alpha is greater", re.IGNORECASE),
     re.compile(r"alpha is smaller", re.IGNORECASE),
 ]
+
+
+def _is_healthy_convergence_trend(metrics: list[dict]) -> bool:
+    if not metrics:
+        return False
+
+    has_not_converged = any(
+        (item.get("status") or "").upper() == "NOT CONVERGED"
+        for item in metrics
+    )
+    if has_not_converged:
+        return False
+
+    residual_trends = [item.get("residual_trend") for item in metrics if item.get("residual_trend")]
+    if not residual_trends:
+        return False
+    if any(trend == "increasing" for trend in residual_trends):
+        return False
+    if sum(1 for trend in residual_trends if trend == "decreasing") < 1:
+        return False
+
+    increment_trends = [item.get("increment_trend") for item in metrics if item.get("increment_trend")]
+    if any(trend == "growing" for trend in increment_trends):
+        return False
+
+    residual_values = [
+        float(item["final_residual"])
+        for item in metrics
+        if item.get("final_residual") is not None
+    ]
+    if residual_values and max(residual_values) > 1e-2:
+        return False
+
+    return True
+
+
+def _apply_convergence_contradiction_rules(
+    issues: list[DiagnosticIssue],
+    metrics: list[dict],
+) -> list[DiagnosticIssue]:
+    if not issues or not _is_healthy_convergence_trend(metrics):
+        return normalize_issues(issues)
+
+    adjusted: list[DiagnosticIssue] = []
+    conflict_reason = "STA trend indicates healthy convergence."
+    for issue in issues:
+        if issue.category != "convergence" or issue.severity not in {"error", "warning"}:
+            adjusted.append(issue)
+            continue
+
+        downgraded_severity = "warning" if issue.severity == "error" else "info"
+        note = "Auto-downgraded: convergence trend is healthy in .sta metrics."
+        suggestion = (issue.suggestion or "").strip()
+        if suggestion:
+            if note not in suggestion:
+                suggestion = f"{suggestion}; {note}"
+        else:
+            suggestion = note
+
+        evidence_conflict = (issue.evidence_conflict or "").strip()
+        if evidence_conflict:
+            if conflict_reason not in evidence_conflict:
+                evidence_conflict = f"{evidence_conflict}; {conflict_reason}"
+        else:
+            evidence_conflict = conflict_reason
+
+        evidence_score = issue.evidence_score
+        if evidence_score is not None:
+            evidence_score = round(
+                _apply_evidence_conflict_penalty(float(evidence_score), issue),
+                2,
+            )
+
+        adjusted.append(
+            DiagnosticIssue(
+                severity=downgraded_severity,
+                category=issue.category,
+                message=issue.message,
+                location=issue.location,
+                evidence_line=issue.evidence_line,
+                evidence_score=evidence_score,
+                evidence_support_count=issue.evidence_support_count,
+                evidence_conflict=evidence_conflict,
+                suggestion=suggestion,
+                priority=issue.priority,
+                auto_fixable=issue.auto_fixable,
+            )
+        )
+
+    return normalize_issues(adjusted)
+
+
+def _apply_category_evidence_guardrails(
+    issues: list[DiagnosticIssue],
+    *,
+    guardrails_path: Optional[Path] = None,
+) -> list[DiagnosticIssue]:
+    if not issues:
+        return normalize_issues(issues)
+
+    guardrails_key = str(guardrails_path) if guardrails_path is not None else ""
+    guardrails = _get_evidence_guardrails(guardrails_key)
+    adjusted: list[DiagnosticIssue] = []
+
+    for issue in issues:
+        guardrail = guardrails.get(issue.category)
+        support_count = issue.evidence_support_count
+        if support_count is None:
+            support_count = 1 if issue.evidence_line else 0
+
+        if issue.severity != "error" or guardrail is None:
+            adjusted.append(issue)
+            continue
+
+        min_support = int(guardrail.get("min_support", 1))
+        min_score = float(guardrail.get("min_score", 0.0))
+        score_penalty = float(guardrail.get("score_penalty", 0.1))
+        evidence_score = issue.evidence_score
+        if evidence_score is None:
+            evidence_score = _infer_evidence_score(issue)
+
+        low_support = support_count < min_support
+        low_score = float(evidence_score) < min_score
+        should_downgrade = low_support or low_score
+        if not should_downgrade:
+            adjusted.append(issue)
+            continue
+
+        reason_parts: list[str] = []
+        if low_support:
+            reason_parts.append(f"support={support_count}<{min_support}")
+        if low_score:
+            reason_parts.append(f"score={float(evidence_score):.2f}<{min_score:.2f}")
+        reason_suffix = ", ".join(reason_parts)
+        conflict_reason = f"Evidence guardrail triggered ({reason_suffix})."
+        note = "Auto-downgraded by category evidence guardrail."
+
+        suggestion = (issue.suggestion or "").strip()
+        if suggestion:
+            if note not in suggestion:
+                suggestion = f"{suggestion}; {note}"
+        else:
+            suggestion = note
+
+        evidence_conflict = (issue.evidence_conflict or "").strip()
+        if evidence_conflict:
+            if conflict_reason not in evidence_conflict:
+                evidence_conflict = f"{evidence_conflict}; {conflict_reason}"
+        else:
+            evidence_conflict = conflict_reason
+
+        evidence_score = round(_clamp_evidence_score(float(evidence_score) - score_penalty), 2)
+
+        adjusted.append(
+            DiagnosticIssue(
+                severity="warning",
+                category=issue.category,
+                message=issue.message,
+                location=issue.location,
+                evidence_line=issue.evidence_line,
+                evidence_score=evidence_score,
+                evidence_support_count=support_count,
+                evidence_conflict=evidence_conflict,
+                suggestion=suggestion,
+                priority=issue.priority,
+                auto_fixable=issue.auto_fixable,
+            )
+        )
+
+    return normalize_issues(adjusted)
 
 
 def _check_convergence(
@@ -928,61 +1741,92 @@ def _check_convergence(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查收敛性：扫描 .sta / .dat / .cvg 文件中的收敛相关错误。
-
-    检测模式：
-    - *ERROR：求解器明确报错
-    - NOT CONVERGED：迭代未收敛
-    - INCREMENT SIZE SMALLER：增量步小于最小值（收敛困难）
-    - DIVERGENCE：发散
-    """
+    濡偓閺屻儲鏁归弫娑㈡６妫版﹫绱濇导妯哄帥娴ｈ法鏁ょ紒鎾寸€崠?.sta 閹稿洦鐖ｉ敍灞芥礀闁偓閸?stderr 閺傚洦婀扮拠浣瑰祦閵?
+    閸戝棛鈥橀幀褏鐡ラ悾銉窗
+    - 閸忓牏婀呯紒鎾寸€崠鏍ㄦ暪閺佹稒瀵氶弽鍥风礄闁灝鍘ゆ禒鍛殶閸忔娊鏁拠宥堫嚖閹躲儻绱?
+    - 閺傚洦婀板Ο鈥崇础娴犲懎婀?stderr 娑擃叀袝閸?    - fatal error 韫囧懘銆忔导鎾閺€鑸垫殐鐠囶厼顣ㄩ崗鎶芥暛鐠?    """
     issues: list[DiagnosticIssue] = []
+    metrics = _get_convergence_metrics(results_dir, ctx=ctx)
+    summary = _summarize_convergence_metrics(metrics)
 
-    for file_path, text in _iter_result_texts(
-        results_dir,
-        ("*.sta", "*.dat", "*.cvg", "*.stderr"),
-        ctx=ctx,
-    ):
-        file_label = file_path.name
+    if summary.get("has_not_converged"):
+        worst_residual = summary.get("worst_final_residual")
+        suggestion = "濡偓閺屻儴娴囬懡閿嬵劄鐠佸墽鐤嗛敍灞筋杻婢堆嗗嚡娴狅絾顐奸弫鐗堝灗鐠嬪啯鏆ｉ弨鑸垫殐鐎圭懓妯?"
+        if worst_residual is not None and worst_residual > 1e-1:
+            suggestion = "濞堝妯婃潏鍐彯閿涘奔绱崗鍫燁梾閺屻儴绔熼悾?閹恒儴袝/鏉炲€熷祹鐎规矮绠熼敍灞借嫙閸戝繐鐨崚婵嗩潗婢х偤鍣?"
+        issues.append(
+            DiagnosticIssue(
+                severity="error",
+                category="convergence",
+                message="缂佹挻鐎崠鏍ㄦ暪閺佹稒瀵氶弽鍥ㄦ▔缁€鐑樻弓閺€鑸垫殐閹存牗鏁归弫娑㈩棑闂勨晠鐝?",
+                location=".sta metrics",
+                suggestion=suggestion,
+            )
+        )
+        return _apply_convergence_contradiction_rules(issues, metrics)
 
-        for pattern in CONVERGENCE_PATTERNS:
-            match = pattern.search(text)
-            if match:
-                matched_text = match.group(0).lower()
-                if "increment size smaller" in matched_text:
-                    msg = "增量步小于最小值，收敛困难"
-                    suggestion = "减小初始步长（*STATIC 首参数），或增大允许的最小步长，或放宽收敛容差"
-                elif "not converged" in matched_text or "converged" in matched_text and "not" in matched_text:
-                    msg = "迭代未收敛"
-                    suggestion = "检查载荷步设置，增大迭代次数或调整收敛容差"
-                elif "divergence" in matched_text:
-                    msg = "求解发散"
-                    suggestion = "检查边界条件和载荷是否合理，减小载荷增量"
-                else:
-                    msg = "求解器报告错误，收敛失败"
-                    suggestion = "检查边界条件、载荷是否合理，或增大迭代次数"
-
-                issues.append(DiagnosticIssue(
-                    severity="error",
+    if metrics:
+        max_iter = summary.get("max_iterations") or 0
+        worst_residual = summary.get("worst_final_residual")
+        increasing_count = summary.get("residual_trend_counts", {}).get("increasing", 0)
+        if max_iter >= 25 and worst_residual is not None and worst_residual > 1e-2 and increasing_count > 0:
+            issues.append(
+                DiagnosticIssue(
+                    severity="warning",
                     category="convergence",
-                    message=msg,
-                    location=file_label,
-                    suggestion=suggestion,
-                ))
-                break  # 每个文件只报一次
+                    message="閺€鑸垫殐鐡掑濞嶆稉宥嚽旂€规熬绱版潻顓濆敩濞嗏剝鏆熸潏鍐彯娑撴梹鐣顔芥弓閺勫孩妯夋稉瀣",
+                    location=".sta metrics",
+                    suggestion="鐏忔繆鐦崙蹇撶毈閸掓繂顫愬銉╂毐閿涘本顥呴弻銉﹀复鐟欙缚绗屾潏鍦櫕閺夆€叉閿涘苯鑻熸径宥嗙壋濮瑰倽袙閹貉冨煑閸欏倹鏆?",
+                )
+            )
 
-    return issues
+    convergence_tokens = ("converg", "increment", "diverg")
+    for file_path, text in _iter_result_texts(results_dir, ("*.stderr",), ctx=ctx):
+        file_label = file_path.name
+        for idx, line in enumerate(text.splitlines(), 1):
+            lowered = line.lower()
+            if not lowered.strip():
+                continue
 
+            msg: Optional[str] = None
+            suggestion: Optional[str] = None
+
+            if "increment size smaller" in lowered:
+                msg = "婢х偤鍣哄銉ョ毈娴滃孩娓剁亸蹇撯偓纭风礉閺€鑸垫殐閸ヤ即姣?"
+                suggestion = "閸戝繐鐨崚婵嗩潗濮濄儵鏆遍敍?STATIC 妫ｆ牕寮弫甯礆閿涘本鍨ㄩ弨鎯ь啍閺€鑸垫殐鐎圭懓妯?"
+            elif "not converged" in lowered or "did not converge" in lowered:
+                msg = "鏉╊厺鍞張顏呮暪閺?"
+                suggestion = "濡偓閺屻儴娴囬懡閿嬵劄鐠佸墽鐤嗛敍灞筋杻婢堆嗗嚡娴狅絾顐奸弫鐗堝灗鐠嬪啯鏆ｉ弨鑸垫殐鐎圭懓妯?"
+            elif "divergence" in lowered:
+                msg = "濮瑰倽袙閸欐垶鏆?"
+                suggestion = "濡偓閺屻儴绔熼悾灞炬蒋娴犺泛鎷版潪鍊熷祹閺勵垰鎯侀崥鍫㈡倞閿涘苯绻€鐟曚焦妞傞崙蹇撶毈鏉炲€熷祹婢х偤鍣?"
+            elif "fatal error" in lowered and any(token in lowered for token in convergence_tokens):
+                msg = "濮瑰倽袙閸ｃ劍濮ら崨濠冩暪閺佹稓娴夐崗瀹犲毀閸涗粙鏁婄拠?"
+                suggestion = "濡偓閺屻儴绔熼悾灞炬蒋娴犺翰鈧焦甯寸憴锕€鎷版潪鍊熷祹鐎规矮绠熼敍灞借嫙婢跺秵鐗虫晶鐐哄櫤閹貉冨煑"
+
+            if msg and suggestion:
+                issues.append(
+                    DiagnosticIssue(
+                        severity="error",
+                        category="convergence",
+                        message=msg,
+                        location=f"{file_label}:{idx}",
+                        suggestion=suggestion,
+                    )
+                )
+                break
+
+    return _apply_convergence_contradiction_rules(issues, metrics)
 
 def _check_time_increment_stagnation(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查时间增量停滞：连续5个增量步 INC TIME 不增大。
+    濡偓閺屻儲妞傞梻鏉戭杻闁插繐浠犲鐑囩窗鏉╃偟鐢?娑擃亜顤冮柌蹇旑劄 INC TIME 娑撳秴顤冩径褋鈧?
 
-    扫描 .sta 和 .stderr 文件，解析 "increment size=" 模式，
-    连续5个增量步的时间增量没有增加则触发警告。
+    閹殿偅寮?.sta 閸?.stderr 閺傚洣娆㈤敍宀冃掗弸?"increment size=" 濡€崇础閿?
+    鏉╃偟鐢?娑擃亜顤冮柌蹇旑劄閻ㄥ嫭妞傞梻鏉戭杻闁插繑鐥呴張澶婎杻閸旂姴鍨憴锕€褰傜拃锕€鎲￠妴?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -991,7 +1835,7 @@ def _check_time_increment_stagnation(
     for file_path, text in _iter_result_texts(results_dir, ("*.sta", "*.stderr"), ctx=ctx):
         file_label = file_path.name
 
-        # 匹配 "increment size= 1.000000e+00" 格式
+        # 閸栧綊鍘?"increment size= 1.000000e+00" 閺嶇厧绱?
         inc_times: list[float] = []
         for line in text.splitlines():
             match = re.search(r"increment\s+size=\s*([0-9eE.+\-]+)", line)
@@ -1002,21 +1846,21 @@ def _check_time_increment_stagnation(
                 except ValueError:
                     pass
 
-        # 检查连续5个增量是否停滞
+        # 濡偓閺屻儴绻涚紒?娑擃亜顤冮柌蹇旀Ц閸氾箑浠犲?
         if len(inc_times) >= 5:
             stagnant_count = 0
             for i in range(1, len(inc_times)):
                 if inc_times[i] <= inc_times[i - 1]:
                     stagnant_count += 1
                 else:
-                    stagnant_count = 0  # 重置计数器
+                    stagnant_count = 0  # 闁插秶鐤嗙拋鈩冩殶閸?
                 if stagnant_count >= 5:
                     issues.append(DiagnosticIssue(
                         severity="warning",
                         category="convergence",
-                        message="时间增量停滞，连续5个增量步 INC TIME 未增大",
+                        message="閺冨爼妫挎晶鐐哄櫤閸嬫粍绮搁敍宀冪箾缂?娑擃亜顤冮柌蹇旑劄 INC TIME 閺堫亜顤冩径?",
                         location=file_label,
-                        suggestion="检查接触设置或减小初始步长（*STATIC 首参数）。接触问题建议：1) 检查接触面定义是否正确 2) 减小接触刚度惩罚因子（*SURFACE BEHAVIOR 的 pressure= 参数）3) 使用 *CONTROLS, PARAMETER=FIELD 调整迭代参数",
+                        suggestion="濡偓閺屻儲甯寸憴锕侇啎缂冾喗鍨ㄩ崙蹇撶毈閸掓繂顫愬銉╂毐閿?STATIC 妫ｆ牕寮弫甯礆閵嗗倹甯寸憴锕傛６妫版ê缂撶拋顕嗙窗1) 濡偓閺屻儲甯寸憴锕傛桨鐎规矮绠熼弰顖氭儊濮濓絿鈥?2) 閸戝繐鐨幒銉ㄐ曢崚姘閹晝缍掗崶鐘茬摍閿?SURFACE BEHAVIOR 閻?pressure= 閸欏倹鏆熼敍?) 娴ｈ法鏁?*CONTROLS, PARAMETER=FIELD 鐠嬪啯鏆ｆ潻顓濆敩閸欏倹鏆?",
                     ))
                     break
 
@@ -1028,11 +1872,11 @@ def _check_input_syntax(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查 INP 输入文件语法：无效卡片等错误。
+    濡偓閺?INP 鏉堟挸鍙嗛弬鍥︽鐠囶厽纭堕敍姘￥閺佸牆宕遍悧鍥╃搼闁挎瑨顕ら妴?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "card image cannot be interpreted"：无法识别的卡片
-    - "unknown keyword"：未知关键词
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "card image cannot be interpreted"閿涙碍妫ゅ▔鏇＄槕閸掝偆娈戦崡锛勫
+    - "unknown keyword"閿涙碍婀惌銉ュ彠闁款喛鐦?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1043,11 +1887,11 @@ def _check_input_syntax(
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="input_syntax",
-                    message="检测到无效 INP 关键词，可能是拼写错误或版本不兼容",
+                    message="濡偓濞村鍩岄弮鐘虫櫏 INP 閸忔娊鏁拠宥忕礉閸欘垵鍏橀弰顖涘閸愭瑩鏁婄拠顖涘灗閻楀牊婀版稉宥呭悑鐎?",
                     location=stderr_file.name,
-                    suggestion="检查 INP 文件中的卡片拼写，确保与 CalculiX 支持的关键词一致。常见错误：拼写错误、大小写不匹配、不支持的卡片格式。",
+                    suggestion="濡偓閺?INP 閺傚洣娆㈡稉顓犳畱閸楋紕澧栭幏鐓庡晸閿涘瞼鈥樻穱婵呯瑢 CalculiX 閺€顖涘瘮閻ㄥ嫬鍙ч柨顔跨槤娑撯偓閼锋番鈧倸鐖剁憴渚€鏁婄拠顖ょ窗閹风厧鍟撻柨娆掝嚖閵嗕礁銇囩亸蹇撳晸娑撳秴灏柊宥冣偓浣风瑝閺€顖涘瘮閻ㄥ嫬宕遍悧鍥ㄧ壐瀵繈鈧?",
                 ))
-                break  # 每个文件只报一次
+                break  # 濮ｅ繋閲滈弬鍥︽閸欘亝濮ゆ稉鈧▎?
 
     return issues
 
@@ -1057,13 +1901,13 @@ def _check_material_definition(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查材料定义完整性：材料属性缺失等错误。
+    濡偓閺屻儲娼楅弬娆忕暰娑斿鐣弫瀛樷偓褝绱伴弶鎰灐鐏炵偞鈧呭繁婢惰京鐡戦柨娆掝嚖閵?
 
-    扫描 .stderr 文件，匹配以下模式（来自 CalculiX 源码）：
-    - "no elastic constants"：缺少弹性常数
-    - "no density was assigned"：缺少密度
-    - "no material was assigned"：未分配材料
-    - "no specific heat"：缺少比热容
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ礄閺夈儴鍤?CalculiX 濠ф劗鐖滈敍澶涚窗
+    - "no elastic constants"閿涙氨宸辩亸鎴濊剨閹冪埗閺?
+    - "no density was assigned"閿涙氨宸辩亸鎴濈槕鎼?
+    - "no material was assigned"閿涙碍婀崚鍡涘帳閺夋劖鏋?
+    - "no specific heat"閿涙氨宸辩亸鎴炵槷閻戭厼顔?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1073,23 +1917,23 @@ def _check_material_definition(
             if match:
                 matched_text = match.group(0).lower()
                 if "no elastic" in matched_text:
-                    msg = "材料缺少弹性常数（Elastic modulus）"
-                    suggestion = "在 *MATERIAL 中添加 *ELASTIC 或 *ELASTIC,TYPE=ISOTROPIC 定义弹性模量"
+                    msg = "閺夋劖鏋＄紓鍝勭毌瀵鈧冪埗閺佸府绱橢lastic modulus閿?"
+                    suggestion = "閸?*MATERIAL 娑擃厽鍧婇崝?*ELASTIC 閹?*ELASTIC,TYPE=ISOTROPIC 鐎规矮绠熷瑙勨偓褎膩闁?"
                 elif "no density" in matched_text:
-                    msg = "材料缺少密度定义"
-                    suggestion = "在 *MATERIAL 中添加 *DENSITY 定义材料密度（动力学分析必需）"
+                    msg = "閺夋劖鏋＄紓鍝勭毌鐎靛棗瀹崇€规矮绠?"
+                    suggestion = "閸?*MATERIAL 娑擃厽鍧婇崝?*DENSITY 鐎规矮绠熼弶鎰灐鐎靛棗瀹抽敍鍫濆З閸旀稑顒熼崚鍡樼€借箛鍛存付閿?"
                 elif "no material" in matched_text:
-                    msg = "单元未分配材料属性"
-                    suggestion = "检查 *SOLID SECTION 是否正确关联了材料名称"
+                    msg = "閸楁洖鍘撻張顏勫瀻闁板秵娼楅弬娆忕潣閹?"
+                    suggestion = "濡偓閺?*SOLID SECTION 閺勵垰鎯佸锝団€橀崗瀹犱粓娴滃棙娼楅弬娆忔倳缁?"
                 elif "no specific heat" in matched_text:
-                    msg = "材料缺少比热容定义"
-                    suggestion = "在 *MATERIAL 中添加 *SPECIFIC HEAT 定义比热容（热分析必需）"
+                    msg = "閺夋劖鏋＄紓鍝勭毌濮ｆ梻鍎圭€圭懓鐣炬稊?"
+                    suggestion = "閸?*MATERIAL 娑擃厽鍧婇崝?*SPECIFIC HEAT 鐎规矮绠熷В鏃傚劰鐎圭櫢绱欓悜顓炲瀻閺嬫劕绻€闂団偓閿?"
                 elif "no conductivity" in matched_text:
-                    msg = "材料缺少热传导系数"
-                    suggestion = "在 *MATERIAL 中添加 *CONDUCTIVITY 定义热传导系数"
+                    msg = "閺夋劖鏋＄紓鍝勭毌閻戭厺绱剁€佃偐閮撮弫?"
+                    suggestion = "閸?*MATERIAL 娑擃厽鍧婇崝?*CONDUCTIVITY 鐎规矮绠熼悜顓濈炊鐎佃偐閮撮弫?"
                 else:
-                    msg = "材料属性定义不完整"
-                    suggestion = "检查材料卡片是否完整定义"
+                    msg = "閺夋劖鏋＄仦鐐粹偓褍鐣炬稊澶夌瑝鐎瑰本鏆?"
+                    suggestion = "濡偓閺屻儲娼楅弬娆忓幢閻楀洦妲搁崥锕€鐣弫鏉戠暰娑?"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="material",
@@ -1107,9 +1951,9 @@ def _check_parameter_syntax(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查卡片参数语法：参数不识别等错误。
+    濡偓閺屻儱宕遍悧鍥у棘閺佹媽顕㈠▔鏇窗閸欏倹鏆熸稉宥堢槕閸掝偆鐡戦柨娆掝嚖閵?
 
-    扫描 .stderr 文件，匹配 "parameter not recognized" 模式。
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁?"parameter not recognized" 濡€崇础閵?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1118,9 +1962,9 @@ def _check_parameter_syntax(
             issues.append(DiagnosticIssue(
                 severity="error",
                 category="input_syntax",
-                message="卡片参数不被识别",
+                message="閸楋紕澧栭崣鍌涙殶娑撳秷顫︾拠鍡楀焼",
                 location=stderr_file.name,
-                suggestion="检查卡片参数拼写是否正确。CalculiX 参数名区分大小写，常见错误：PARAMETERS 而非 PARAMETER",
+                suggestion="濡偓閺屻儱宕遍悧鍥у棘閺佺増瀚鹃崘娆愭Ц閸氾附顒滅涵顔衡偓渚癮lculiX 閸欏倹鏆熼崥宥呭隘閸掑棗銇囩亸蹇撳晸閿涘苯鐖剁憴渚€鏁婄拠顖ょ窗PARAMETERS 閼板矂娼?PARAMETER",
             ))
             break
 
@@ -1132,11 +1976,11 @@ def _check_load_transfer(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查载荷传递问题：载荷未正确传递到结构。
+    濡偓閺屻儴娴囬懡铚傜炊闁帡妫舵０姗堢窗鏉炲€熷祹閺堫亝顒滅涵顔荤炊闁帒鍩岀紒鎾寸€妴?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "RHS only consists of 0.0"：载荷向量为零，通常是耦合约束配置错误
-    - "concentrated loads: 0"：集中载荷数量为零
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "RHS only consists of 0.0"閿涙俺娴囬懡宄版倻闁插繋璐熼梿璁圭礉闁艾鐖堕弰顖濃偓锕€鎮庣痪锔芥将闁板秶鐤嗛柨娆掝嚖
+    - "concentrated loads: 0"閿涙岸娉︽稉顓℃祰閼介攱鏆熼柌蹇庤礋闂?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1146,17 +1990,17 @@ def _check_load_transfer(
             if match:
                 matched_text = match.group(0).lower()
                 if "rhs only consists of 0.0" in matched_text:
-                    msg = "载荷向量为零（RHS only consists of 0.0），载荷未正确传递到结构"
+                    msg = "鏉炲€熷祹閸氭垿鍣烘稉娲祩閿涘湩HS only consists of 0.0閿涘绱濇潪鍊熷祹閺堫亝顒滅涵顔荤炊闁帒鍩岀紒鎾寸€?"
                     suggestion = (
-                        "检查以下可能原因：\n"
-                        "1) *COUPLING 与 *DISTRIBUTING 联用时，载荷必须使用 *DLOAD 而非 *CLOAD\n"
-                        "2) 检查 *COUPLING 的 REF NODE 是否正确设置\n"
-                        "3) 检查耦合约束的 DOF 是否与载荷方向一致\n"
-                        "4) 如果使用 DISTRIBUTING 耦合，改用 *DLOAD 在表面施加分布载荷"
+                        "濡偓閺屻儰浜掓稉瀣讲閼宠棄甯崶鐙呯窗\n"
+                        "1) *COUPLING 娑?*DISTRIBUTING 閼辨梻鏁ら弮璁圭礉鏉炲€熷祹韫囧懘銆忔担璺ㄦ暏 *DLOAD 閼板矂娼?*CLOAD\n"
+                        "2) 濡偓閺?*COUPLING 閻?REF NODE 閺勵垰鎯佸锝団€樼拋鍓х枂\n"
+                        "3) 濡偓閺屻儴鈧箑鎮庣痪锔芥将閻?DOF 閺勵垰鎯佹稉搴ゆ祰閼介攱鏌熼崥鎴滅閼风⒍n"
+                        "4) 婵″倹鐏夋担璺ㄦ暏 DISTRIBUTING 閼帮箑鎮庨敍灞炬暭閻?*DLOAD 閸︺劏銆冮棃銏℃煢閸旂姴鍨庣敮鍐祰閼?"
                     )
                 else:
-                    msg = "集中载荷数量为零，载荷未正确定义"
-                    suggestion = "检查 *CLOAD 或 *DLOAD 是否正确施加"
+                    msg = "闂嗗棔鑵戞潪鍊熷祹閺佷即鍣烘稉娲祩閿涘矁娴囬懡閿嬫弓濮濓絿鈥樼€规矮绠?"
+                    suggestion = "濡偓閺?*CLOAD 閹?*DLOAD 閺勵垰鎯佸锝団€橀弬钘夊"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="load_transfer",
@@ -1174,11 +2018,11 @@ def _check_boundary_issues(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查边界条件问题：欠约束/过约束导致的刚体运动或奇异性。
+    濡偓閺屻儴绔熼悾灞炬蒋娴犲爼妫舵０姗堢窗濞嗙姷瀹抽弶?鏉╁洨瀹抽弶鐔奉嚤閼峰娈戦崚姘秼鏉╂劕濮╅幋鏍ь殞瀵倹鈧佲偓?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "zero pivot"：零主元，通常是边界条件不完整
-    - "singular matrix"：矩阵奇异，欠约束或过约束
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "zero pivot"閿涙岸娴傛稉璇插帗閿涘矂鈧艾鐖堕弰顖濈珶閻ｅ本娼禒鏈电瑝鐎瑰本鏆?
+    - "singular matrix"閿涙氨鐓╅梼闈涱殞瀵偊绱濆▎鐘靛閺夌喐鍨ㄦ潻鍥╁閺?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1188,25 +2032,25 @@ def _check_boundary_issues(
             if match:
                 matched_text = match.group(0).lower()
                 if "zero pivot" in matched_text:
-                    msg = "检测到零主元（zero pivot），可能是边界条件不完整"
+                    msg = "濡偓濞村鍩岄梿鏈靛瘜閸忓喛绱檢ero pivot閿涘绱濋崣顖濆厴閺勵垵绔熼悾灞炬蒋娴犳湹绗夌€瑰本鏆?"
                     suggestion = (
-                        "检查以下可能原因：\n"
-                        "1) 结构是否被完全约束（尤其旋转自由度）\n"
-                        "2) 壳单元是否有足够的边界约束\n"
-                        "3) 接触面是否正确定义\n"
-                        "4) 节点编号是否连续"
+                        "濡偓閺屻儰浜掓稉瀣讲閼宠棄甯崶鐙呯窗\n"
+                        "1) 缂佹挻鐎弰顖氭儊鐞氼偄鐣崗銊у閺夌噦绱欑亸銈呭従閺冨娴嗛懛顏嗘暠鎼达讣绱歕n"
+                        "2) 婢瑰啿宕熼崗鍐╂Ц閸氾附婀佺搾鍐差檮閻ㄥ嫯绔熼悾宀€瀹抽弶鐒卬"
+                        "3) 閹恒儴袝闂堛垺妲搁崥锔筋劀绾喖鐣炬稊濉"
+                        "4) 閼哄倻鍋ｇ紓鏍у娇閺勵垰鎯佹潻鐐电敾"
                     )
                 elif "singular matrix" in matched_text:
-                    msg = "矩阵奇异，结构存在欠约束或过约束"
+                    msg = "閻晠妯€婵傚洤绱撻敍宀€绮ㄩ弸鍕摠閸︺劍鐟虹痪锔芥将閹存牞绻冪痪锔芥将"
                     suggestion = (
-                        "检查边界条件：\n"
-                        "1) 确保所有位移分量都被约束\n"
-                        "2) 检查是否存在冲突的边界条件\n"
-                        "3) 壳/梁结构需要面外约束"
+                        "濡偓閺屻儴绔熼悾灞炬蒋娴犺绱癨n"
+                        "1) 绾喕绻氶幍鈧張澶夌秴缁夎鍨庨柌蹇涘厴鐞氼偆瀹抽弶鐒卬"
+                        "2) 濡偓閺屻儲妲搁崥锕€鐡ㄩ崷銊ュ暱缁愪胶娈戞潏鍦櫕閺夆€叉\n"
+                        "3) 婢?濮婁胶绮ㄩ弸鍕付鐟曚線娼版径鏍閺?"
                     )
                 else:
-                    msg = "边界条件可能存在问题"
-                    suggestion = "检查边界条件是否完整且无冲突"
+                    msg = "鏉堝湱鏅弶鈥叉閸欘垵鍏樼€涙ê婀梻顕€顣?"
+                    suggestion = "濡偓閺屻儴绔熼悾灞炬蒋娴犺埖妲搁崥锕€鐣弫缈犵瑬閺冪姴鍟跨粣?"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="boundary_condition",
@@ -1224,13 +2068,13 @@ def _check_contact_issues(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查接触问题：接触定义错误、接触未找到等。
+    濡偓閺屻儲甯寸憴锕傛６妫版﹫绱伴幒銉ㄐ曠€规矮绠熼柨娆掝嚖閵嗕焦甯寸憴锔芥弓閹垫儳鍩岀粵澶堚偓?
 
-    扫描 .stderr 文件，匹配以下模式（增强自 calculix_patterns.txt）：
-    - "contact not found"：接触面未找到
-    - "overclosure"：过盈量过大
-    - "contact stress negative"：接触应力为负
-    - "slave/master surface"：主从面问题
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ礄婢х偛宸遍懛?calculix_patterns.txt閿涘绱?
+    - "contact not found"閿涙碍甯寸憴锕傛桨閺堫亝澹橀崚?
+    - "overclosure"閿涙俺绻冮惄鍫ュ櫤鏉╁洤銇?
+    - "contact stress negative"閿涙碍甯寸憴锕€绨查崝娑楄礋鐠?
+    - "slave/master surface"閿涙矮瀵屾禒搴ㄦ桨闂傤噣顣?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1240,32 +2084,32 @@ def _check_contact_issues(
             if match:
                 matched_text = match.group(0).lower()
                 if "contact" in matched_text and "not" in matched_text and "found" in matched_text:
-                    msg = "接触面未找到，接触定义可能错误"
+                    msg = "閹恒儴袝闂堛垺婀幍鎯у煂閿涘本甯寸憴锕€鐣炬稊澶婂讲閼充粙鏁婄拠?"
                     suggestion = (
-                        "检查以下可能原因：\n"
-                        "1) 主从面是否正确设置\n"
-                        "2) 接触面之间是否有初始间隙\n"
-                        "3) 接触面节点是否在同一位置\n"
-                        "4) 接触面法向方向是否正确"
+                        "濡偓閺屻儰浜掓稉瀣讲閼宠棄甯崶鐙呯窗\n"
+                        "1) 娑撹绮犻棃銏℃Ц閸氾附顒滅涵顔款啎缂冪敍n"
+                        "2) 閹恒儴袝闂堫澀绠ｉ梻瀛樻Ц閸氾附婀侀崚婵嗩潗闂傛挳娈璡n"
+                        "3) 閹恒儴袝闂堛垼濡悙瑙勬Ц閸氾箑婀崥灞肩娴ｅ秶鐤哱n"
+                        "4) 閹恒儴袝闂堛垺纭堕崥鎴炴煙閸氭垶妲搁崥锔筋劀绾?"
                     )
                 elif "overclosure" in matched_text:
-                    msg = "接触过盈量过大"
-                    suggestion = "检查初始几何位置，确保接触面之间没有过大的过盈量"
+                    msg = "閹恒儴袝鏉╁洨娉╅柌蹇氱箖婢?"
+                    suggestion = "濡偓閺屻儱鍨垫慨瀣殤娴ｆ洑缍呯純顕嗙礉绾喕绻氶幒銉ㄐ曢棃顫闂傚瓨鐥呴張澶庣箖婢堆呮畱鏉╁洨娉╅柌?"
                 elif "contact stress" in matched_text and "negative" in matched_text:
-                    msg = "接触应力为负，可能存在穿透问题"
-                    suggestion = "检查接触刚度设置和初始间隙"
+                    msg = "閹恒儴袝鎼存柨濮忔稉楦跨閿涘苯褰查懗钘夌摠閸︺劎鈹涢柅蹇涙６妫?"
+                    suggestion = "濡偓閺屻儲甯寸憴锕€鍨版惔锕侇啎缂冾喖鎷伴崚婵嗩潗闂傛挳娈?"
                 elif "slave surface" in matched_text or "master surface" in matched_text:
-                    msg = "接触主从面定义存在问题"
-                    suggestion = "检查 *CONTACT PAIR 中 SLAVE 和 MASTER 面的设置是否正确"
+                    msg = "閹恒儴袝娑撹绮犻棃銏犵暰娑斿鐡ㄩ崷銊╂６妫?"
+                    suggestion = "濡偓閺?*CONTACT PAIR 娑?SLAVE 閸?MASTER 闂堛垻娈戠拋鍓х枂閺勵垰鎯佸锝団€?"
                 elif "slave node" in matched_text:
-                    msg = "接触从节点定义存在问题"
-                    suggestion = "检查接触从节点的选取是否正确"
+                    msg = "閹恒儴袝娴犲氦濡悙鐟扮暰娑斿鐡ㄩ崷銊╂６妫?"
+                    suggestion = "濡偓閺屻儲甯寸憴锔跨矤閼哄倻鍋ｉ惃鍕偓澶婂絿閺勵垰鎯佸锝団€?"
                 elif "no tied" in matched_text or "tied mpc" in matched_text:
-                    msg = "接触绑定/粘接问题"
-                    suggestion = "检查 *TIE 命令的绑定面设置"
+                    msg = "閹恒儴袝缂佹垵鐣?缁ɑ甯撮梻顕€顣?"
+                    suggestion = "濡偓閺?*TIE 閸涙垝鎶ら惃鍕拨鐎规岸娼扮拋鍓х枂"
                 else:
-                    msg = "接触定义可能存在问题"
-                    suggestion = "检查 *CONTACT PAIR 的主从面设置和 *SURFACE INTERACTION 参数"
+                    msg = "閹恒儴袝鐎规矮绠熼崣顖濆厴鐎涙ê婀梻顕€顣?"
+                    suggestion = "濡偓閺?*CONTACT PAIR 閻ㄥ嫪瀵屾禒搴ㄦ桨鐠佸墽鐤嗛崪?*SURFACE INTERACTION 閸欏倹鏆?"
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="contact",
@@ -1283,12 +2127,12 @@ def _check_file_io_errors(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查文件 I/O 错误（来自 CalculiX 源码 528 模式）。
+    濡偓閺屻儲鏋冩禒?I/O 闁挎瑨顕ら敍鍫熸降閼?CalculiX 濠ф劗鐖?528 濡€崇础閿涘鈧?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "could not open file"：文件打开失败
-    - "file name is lacking"：文件名缺失
-    - "file name too long"：文件名过长
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "could not open file"閿涙碍鏋冩禒鑸靛ⅵ瀵偓婢惰精瑙?
+    - "file name is lacking"閿涙碍鏋冩禒璺烘倳缂傚搫銇?
+    - "file name too long"閿涙碍鏋冩禒璺烘倳鏉╁洭鏆?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1298,26 +2142,26 @@ def _check_file_io_errors(
             if match:
                 matched_text = match.group(0).lower()
                 if "could not open file" in matched_text:
-                    msg = "文件打开失败"
-                    suggestion = "检查 INP 文件路径是否正确，确保文件存在且有读取权限"
+                    msg = "閺傚洣娆㈤幍鎾崇磻婢惰精瑙?"
+                    suggestion = "濡偓閺?INP 閺傚洣娆㈢捄顖氱窞閺勵垰鎯佸锝団€橀敍宀€鈥樻穱婵囨瀮娴犺泛鐡ㄩ崷銊ょ瑬閺堝顕伴崣鏍ㄦ綀闂?"
                 elif "could not open" in matched_text:
-                    msg = "文件打开失败"
-                    suggestion = "检查文件名和路径是否正确"
+                    msg = "閺傚洣娆㈤幍鎾崇磻婢惰精瑙?"
+                    suggestion = "濡偓閺屻儲鏋冩禒璺烘倳閸滃矁鐭惧鍕Ц閸氾附顒滅涵?"
                 elif "file name is lacking" in matched_text:
-                    msg = "文件名缺失"
-                    suggestion = "检查 INP 文件中是否缺少输入文件名称"
+                    msg = "閺傚洣娆㈤崥宥囧繁婢?"
+                    suggestion = "濡偓閺?INP 閺傚洣娆㈡稉顓熸Ц閸氾妇宸辩亸鎴ｇ翻閸忋儲鏋冩禒璺烘倳缁?"
                 elif "file name too long" in matched_text or "input file name is too long" in matched_text:
-                    msg = "文件名过长"
-                    suggestion = "缩短输入文件的路径或文件名，CalculiX 对文件名长度有限制"
+                    msg = "閺傚洣娆㈤崥宥堢箖闂€?"
+                    suggestion = "缂傗晝鐓潏鎾冲弳閺傚洣娆㈤惃鍕熅瀵板嫭鍨ㄩ弬鍥︽閸氬稄绱滳alculiX 鐎佃鏋冩禒璺烘倳闂€鍨閺堝妾洪崚?"
                 elif "could not delete" in matched_text:
-                    msg = "文件删除失败"
-                    suggestion = "检查文件是否被其他程序占用，或是否有写入权限"
+                    msg = "閺傚洣娆㈤崚鐘绘珟婢惰精瑙?"
+                    suggestion = "濡偓閺屻儲鏋冩禒鑸垫Ц閸氾箒顫﹂崗鏈电铂缁嬪绨崡鐘垫暏閿涘本鍨ㄩ弰顖氭儊閺堝鍟撻崗銉︽綀闂?"
                 elif "syntax error" in matched_text:
-                    msg = "输入文件语法错误"
-                    suggestion = "检查 INP 文件格式是否正确，确保卡片语法符合 CalculiX 规范"
+                    msg = "鏉堟挸鍙嗛弬鍥︽鐠囶厽纭堕柨娆掝嚖"
+                    suggestion = "濡偓閺?INP 閺傚洣娆㈤弽鐓庣础閺勵垰鎯佸锝団€橀敍宀€鈥樻穱婵嗗幢閻楀洩顕㈠▔鏇狀儊閸?CalculiX 鐟欏嫯瀵?"
                 else:
-                    msg = "文件 I/O 错误"
-                    suggestion = "检查输入输出文件路径和权限"
+                    msg = "閺傚洣娆?I/O 闁挎瑨顕?"
+                    suggestion = "濡偓閺屻儴绶崗銉ㄧ翻閸戠儤鏋冩禒鎯扮熅瀵板嫬鎷伴弶鍐"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="file_io",
@@ -1335,12 +2179,12 @@ def _check_user_element_errors(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查用户单元/材料错误（来自 CalculiX 源码）。
+    濡偓閺屻儳鏁ら幋宄板礋閸?閺夋劖鏋￠柨娆掝嚖閿涘牊娼甸懛?CalculiX 濠ф劗鐖滈敍澶堚偓?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "user element"：用户单元问题
-    - "umat"：用户材料子程序问题
-    - "user subroutine"：用户子程序问题
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "user element"閿涙氨鏁ら幋宄板礋閸忓啴妫舵０?
+    - "umat"閿涙氨鏁ら幋閿嬫綏閺傛瑥鐡欑粙瀣碍闂傤噣顣?
+    - "user subroutine"閿涙氨鏁ら幋宄扮摍缁嬪绨梻顕€顣?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1350,17 +2194,17 @@ def _check_user_element_errors(
             if match:
                 matched_text = match.group(0).lower()
                 if "no user material" in matched_text or "umat" in matched_text and "no" in matched_text:
-                    msg = "用户材料子程序（UMAT）未找到"
-                    suggestion = "确保 *USER MATERIAL 子程序已正确编译并链接，或使用标准材料模型"
+                    msg = "閻劍鍩涢弶鎰灐鐎涙劗鈻兼惔蹇ョ礄UMAT閿涘婀幍鎯у煂"
+                    suggestion = "绾喕绻?*USER MATERIAL 鐎涙劗鈻兼惔蹇撳嚒濮濓絿鈥樼紓鏍槯楠炲爼鎽奸幒銉礉閹存牔濞囬悽銊︾垼閸戝棙娼楅弬娆惸侀崹?"
                 elif "user element" in matched_text:
-                    msg = "用户单元（UELS）存在问题"
-                    suggestion = "检查用户单元子程序是否正确实现和链接"
+                    msg = "閻劍鍩涢崡鏇炲帗閿涘湶ELS閿涘鐡ㄩ崷銊╂６妫?"
+                    suggestion = "濡偓閺屻儳鏁ら幋宄板礋閸忓啫鐡欑粙瀣碍閺勵垰鎯佸锝団€樼€圭偟骞囬崪宀勬懠閹?"
                 elif "umat" in matched_text:
-                    msg = "用户材料子程序（UMAT）存在问题"
-                    suggestion = "检查 UMAT 子程序的输入参数和材料参数是否正确"
+                    msg = "閻劍鍩涢弶鎰灐鐎涙劗鈻兼惔蹇ョ礄UMAT閿涘鐡ㄩ崷銊╂６妫?"
+                    suggestion = "濡偓閺?UMAT 鐎涙劗鈻兼惔蹇曟畱鏉堟挸鍙嗛崣鍌涙殶閸滃本娼楅弬娆忓棘閺佺増妲搁崥锔筋劀绾?"
                 else:
-                    msg = "用户子程序存在问题"
-                    suggestion = "检查用户自定义子程序是否正确编译和链接"
+                    msg = "閻劍鍩涚€涙劗鈻兼惔蹇撶摠閸︺劑妫舵０?"
+                    suggestion = "濡偓閺屻儳鏁ら幋鐤殰鐎规矮绠熺€涙劗鈻兼惔蹇旀Ц閸氾附顒滅涵顔剧椽鐠囨垵鎷伴柧鐐复"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="user_element",
@@ -1378,13 +2222,13 @@ def _check_mpc_limits(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查 MPC/约束数量超限错误（来自 CalculiX 源码）。
+    濡偓閺?MPC/缁撅附娼弫浼村櫤鐡掑懘妾洪柨娆掝嚖閿涘牊娼甸懛?CalculiX 濠ф劗鐖滈敍澶堚偓?
 
-    扫描 .stderr 文件，匹配以下模式：
-    - "increase nmpc_"：MPC 数量超限
-    - "increase nboun_"：边界条件数量超限
-    - "increase nk_"：节点数量超限
-    - "increase memmpc_"：MPC 内存超限
+    閹殿偅寮?.stderr 閺傚洣娆㈤敍灞藉爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - "increase nmpc_"閿涙瓉PC 閺佷即鍣虹搾鍛存
+    - "increase nboun_"閿涙俺绔熼悾灞炬蒋娴犺埖鏆熼柌蹇氱Т闂?
+    - "increase nk_"閿涙俺濡悙瑙勬殶闁插繗绉撮梽?
+    - "increase memmpc_"閿涙瓉PC 閸愬懎鐡ㄧ搾鍛存
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1394,41 +2238,41 @@ def _check_mpc_limits(
             if match:
                 matched_text = match.group(0).lower()
                 if "nmpc" in matched_text:
-                    msg = "MPC（多点约束）数量超限"
-                    suggestion = "减少模型中的 MPC 数量，或在 *MPCACABLE 参数中增加限制值"
+                    msg = "MPC閿涘牆顦块悙鍦閺夌噦绱氶弫浼村櫤鐡掑懘妾?"
+                    suggestion = "閸戝繐鐨Ο鈥崇€锋稉顓犳畱 MPC 閺佷即鍣洪敍灞惧灗閸?*MPCACABLE 閸欏倹鏆熸稉顓烆杻閸旂娀妾洪崚璺衡偓?"
                 elif "nboun" in matched_text:
-                    msg = "边界条件数量超限"
-                    suggestion = "简化边界条件定义，减少边界条件数量"
+                    msg = "鏉堝湱鏅弶鈥叉閺佷即鍣虹搾鍛存"
+                    suggestion = "缁犫偓閸栨牞绔熼悾灞炬蒋娴犺泛鐣炬稊澶涚礉閸戝繐鐨潏鍦櫕閺夆€叉閺佷即鍣?"
                 elif "nk" in matched_text:
-                    msg = "节点数量超限"
-                    suggestion = "检查网格节点编号是否合理，确保节点数量在允许范围内"
+                    msg = "閼哄倻鍋ｉ弫浼村櫤鐡掑懘妾?"
+                    suggestion = "濡偓閺屻儳缍夐弽鑹板Ν閻愬湱绱崣閿嬫Ц閸氾箑鎮庨悶鍡礉绾喕绻氶懞鍌滃仯閺佷即鍣洪崷銊ュ帒鐠佹瓕瀵栭崶鏉戝敶"
                 elif "memmpc" in matched_text:
-                    msg = "MPC 内存分配超限"
-                    suggestion = "减少复杂 MPC 约束，或增加 *MPCABLE 的 MEMMPCC 参数"
+                    msg = "MPC 閸愬懎鐡ㄩ崚鍡涘帳鐡掑懘妾?"
+                    suggestion = "閸戝繐鐨径宥嗘絽 MPC 缁撅附娼敍灞惧灗婢х偛濮?*MPCABLE 閻?MEMMPCC 閸欏倹鏆?"
                 elif "nbody" in matched_text:
-                    msg = "体积载荷数量超限"
-                    suggestion = "减少 *DLOAD 定义的体积载荷数量"
+                    msg = "娴ｆ挾袧鏉炲€熷祹閺佷即鍣虹搾鍛存"
+                    suggestion = "閸戝繐鐨?*DLOAD 鐎规矮绠熼惃鍕秼缁夘垵娴囬懡閿嬫殶闁?"
                 elif "nforc" in matched_text:
-                    msg = "集中力数量超限"
-                    suggestion = "减少 *CLOAD 定义的集中力数量"
+                    msg = "闂嗗棔鑵戦崝娑欐殶闁插繗绉撮梽?"
+                    suggestion = "閸戝繐鐨?*CLOAD 鐎规矮绠熼惃鍕肠娑擃厼濮忛弫浼村櫤"
                 elif "nload" in matched_text:
-                    msg = "载荷数量超限"
-                    suggestion = "减少载荷定义数量，或合并载荷"
+                    msg = "鏉炲€熷祹閺佷即鍣虹搾鍛存"
+                    suggestion = "閸戝繐鐨潪鍊熷祹鐎规矮绠熼弫浼村櫤閿涘本鍨ㄩ崥鍫濊嫙鏉炲€熷祹"
                 elif "norien" in matched_text:
-                    msg = "方向定义数量超限"
-                    suggestion = "减少 *ORIENTATION 定义数量"
+                    msg = "閺傜懓鎮滅€规矮绠熼弫浼村櫤鐡掑懘妾?"
+                    suggestion = "閸戝繐鐨?*ORIENTATION 鐎规矮绠熼弫浼村櫤"
                 elif "namtot" in matched_text:
-                    msg = "总节点/单元属性数量超限"
-                    suggestion = "简化模型，减少节点集和单元集数量"
+                    msg = "閹槒濡悙?閸楁洖鍘撶仦鐐粹偓褎鏆熼柌蹇氱Т闂?"
+                    suggestion = "缁犫偓閸栨牗膩閸ㄥ绱濋崙蹇撶毌閼哄倻鍋ｉ梿鍡楁嫲閸楁洖鍘撻梿鍡樻殶闁?"
                 elif "nprint" in matched_text:
-                    msg = "输出请求数量超限"
-                    suggestion = "减少 *NODE PRINT 或 *EL PRINT 的输出变量数量"
+                    msg = "鏉堟挸鍤拠閿嬬湴閺佷即鍣虹搾鍛存"
+                    suggestion = "閸戝繐鐨?*NODE PRINT 閹?*EL PRINT 閻ㄥ嫯绶崙鍝勫綁闁插繑鏆熼柌?"
                 elif "dimension" in matched_text:
-                    msg = "模型维度或网格尺寸超限"
-                    suggestion = "检查网格尺寸是否合理，减小模型规模"
+                    msg = "濡€崇€风紒鏉戝閹存牜缍夐弽鐓庢槀鐎垫瓕绉撮梽?"
+                    suggestion = "濡偓閺屻儳缍夐弽鐓庢槀鐎靛憡妲搁崥锕€鎮庨悶鍡礉閸戝繐鐨Ο鈥崇€风憴鍕?"
                 else:
-                    msg = "内存或数量超限"
-                    suggestion = "简化模型或增加内存限制参数"
+                    msg = "閸愬懎鐡ㄩ幋鏍ㄦ殶闁插繗绉撮梽?"
+                    suggestion = "缁犫偓閸栨牗膩閸ㄥ鍨ㄦ晶鐐插閸愬懎鐡ㄩ梽鎰煑閸欏倹鏆?"
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="limit_exceeded",
@@ -1446,62 +2290,66 @@ def _check_dynamics_errors(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查动力学/模态分析错误（来自 CalculiX 源码）。
-
-    扫描 .stderr 文件，匹配以下模式：
-    - "eigenvalue"：特征值问题
-    - "frequencies"：频率提取问题
-    - "cyclic symmetric"：循环对称问题
+    濡偓閺屻儱濮╅崝娑橆劅/濡剝鈧礁鍨庨弸鎰版晩鐠囶垽绱欓弶銉ㄥ殰 CalculiX 濠ф劗鐖滃Ο鈥崇础閿涘鈧?
+    娑撴椽妾锋担搴ゎ嚖閹躲儻绱濇禒鍛躬閳ユ粓鏁婄拠顖濐嚔婢у啠鈧繀绗呯憴锕€褰傞敍?    - eigenvalue 鐞涘苯绻€妞よ瀵橀崥?error/failed/cannot/not/invalid 娑斿绔?
+    - cyclic symmetric 鐞涘苯绻€妞よ瀵橀崥顐︽晩鐠囶垵顕㈡晶?    - frequencies less than 1 eigenvalue 閻╁瓨甯撮崚銈呯暰
+    - alpha is greater/smaller 閻╁瓨甯撮崚銈呯暰
     """
     issues: list[DiagnosticIssue] = []
+    error_tokens = ("error", "failed", "cannot", "not", "invalid")
 
     for stderr_file, text in _iter_result_texts(results_dir, ("*.stderr",), ctx=ctx):
-        for pattern in DYNAMICS_PATTERNS:
-            match = pattern.search(text)
-            if match:
-                matched_text = match.group(0).lower()
-                if "eigenvalue" in matched_text:
-                    msg = "特征值求解失败"
-                    suggestion = "检查模态分析参数，确保结构有足够的约束"
-                elif "less than 1 eigenvalue" in matched_text:
-                    msg = "特征值数量不足"
-                    suggestion = "检查是否所有频率都为零（刚体模态），确保边界条件正确"
-                elif "cyclic symmetric" in matched_text:
-                    msg = "循环对称分析存在问题"
-                    suggestion = "检查循环对称边界条件是否正确设置"
-                elif "alpha is greater" in matched_text or "alpha is smaller" in matched_text:
-                    msg = "动力学时间积分参数 alpha 不合理"
-                    suggestion = "检查 *DYNAMIC 步骤的 alpha 参数（推荐值：-0.05 到 -0.3）"
-                else:
-                    msg = "动力学/模态分析存在问题"
-                    suggestion = "检查动力学分析参数设置"
-                issues.append(DiagnosticIssue(
-                    severity="warning",
-                    category="dynamics",
-                    message=msg,
-                    location=stderr_file.name,
-                    suggestion=suggestion,
-                ))
+        lines = text.splitlines()
+        for idx, line in enumerate(lines, 1):
+            lowered = line.lower()
+            if not lowered.strip():
+                continue
+
+            msg: Optional[str] = None
+            suggestion: Optional[str] = None
+
+            if "frequencies" in lowered and "less than 1 eigenvalue" in lowered:
+                msg = "閻楃懓绶涢崐鍏兼殶闁插繋绗夌搾?"
+                suggestion = "濡偓閺屻儲妲搁崥锔藉閺堝顣堕悳鍥厴娑撴椽娴傞敍鍫濆灠娴ｆ挻膩閹緤绱氶敍宀€鈥樻穱婵婄珶閻ｅ本娼禒鑸殿劀绾?"
+            elif "eigenvalue" in lowered and any(token in lowered for token in error_tokens):
+                msg = "閻楃懓绶涢崐鍏肩湴鐟欙絽銇戠拹?"
+                suggestion = "濡偓閺屻儲膩閹礁鍨庨弸鎰棘閺佸府绱濈涵顔荤箽缂佹挻鐎張澶庡喕婢剁喓娈戠痪锔芥将"
+            elif "cyclic symmetric" in lowered and any(token in lowered for token in error_tokens):
+                msg = "瀵邦亞骞嗙€靛湱袨閸掑棙鐎界€涙ê婀梻顕€顣?"
+                suggestion = "濡偓閺屻儱鎯婇悳顖氼嚠缁夋媽绔熼悾灞炬蒋娴犺埖妲搁崥锔筋劀绾喛顔曠純?"
+            elif "alpha is greater" in lowered or "alpha is smaller" in lowered:
+                msg = "閸斻劌濮忕€涳附妞傞梻瀵感濋崚鍡楀棘閺?alpha 娑撳秴鎮庨悶?"
+                suggestion = "濡偓閺?*DYNAMIC 濮濄儵顎冮惃?alpha 閸欏倹鏆熼敍鍫熷腹閼芥劕鈧》绱?0.05 閸?-0.3閿?"
+
+            if msg and suggestion:
+                issues.append(
+                    DiagnosticIssue(
+                        severity="warning",
+                        category="dynamics",
+                        message=msg,
+                        location=f"{stderr_file.name}:{idx}",
+                        suggestion=suggestion,
+                    )
+                )
                 break
 
     return issues
-
 
 def _check_inp_file_quality(
     inp_file: Optional[Path],
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    直接扫描 INP 文件，检测被注释的关键卡片和常见错误。
+    閻╁瓨甯撮幍顐ｅ伎 INP 閺傚洣娆㈤敍灞绢梾濞村顫﹀▔銊╁櫞閻ㄥ嫬鍙ч柨顔煎幢閻楀洤鎷扮敮姝岊潌闁挎瑨顕ら妴?
 
-    检测以下问题：
-    - 被注释的 *SURFACE BEHAVIOR（接触行为缺失）
-    - 被注释的 *ELASTIC（弹性常数缺失）
-    - 被注释的 *MATERIAL（材料定义缺失）
-    - 缺少 *SOLID SECTION 的材料关联
-    - 缺少 *BOUNDARY 边界条件
-    - 缺少 *STEP 分析步
-    - 载荷施加位置错误（载荷在 *STEP 之前）
+    濡偓濞村浜掓稉瀣６妫版﹫绱?
+    - 鐞氼偅鏁為柌濠勬畱 *SURFACE BEHAVIOR閿涘牊甯寸憴锕侇攽娑撹櫣宸辨径鎲嬬礆
+    - 鐞氼偅鏁為柌濠勬畱 *ELASTIC閿涘牆鑴婇幀褍鐖堕弫鎵繁婢舵唻绱?
+    - 鐞氼偅鏁為柌濠勬畱 *MATERIAL閿涘牊娼楅弬娆忕暰娑斿宸辨径鎲嬬礆
+    - 缂傚搫鐨?*SOLID SECTION 閻ㄥ嫭娼楅弬娆忓彠閼?
+    - 缂傚搫鐨?*BOUNDARY 鏉堝湱鏅弶鈥叉
+    - 缂傚搫鐨?*STEP 閸掑棙鐎藉?
+    - 鏉炲€熷祹閺傝棄濮炴担宥囩枂闁挎瑨顕ら敍鍫ｆ祰閼藉嘲婀?*STEP 娑斿澧犻敍?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1512,35 +2360,35 @@ def _check_inp_file_quality(
     if not lines:
         return issues
 
-    # 收集所有关键字（包含注释行）
+    # 閺€鍫曟肠閹碘偓閺堝鍙ч柨顔肩摟閿涘牆瀵橀崥顐ｆ暈闁插﹨顢戦敍?
     all_keywords: set[str] = set()
     active_keywords: set[str] = set()
     commented_keywords: set[str] = set()
 
-    # 关键字行号（用于定位）
+    # 閸忔娊鏁€涙顢戦崣鍑ょ礄閻劋绨€规矮缍呴敍?
     keyword_lines: dict[str, list[int]] = {}
 
     i = 0
     while i < len(lines):
         raw_line = lines[i].strip()
 
-        # 跳过空行（块注释行 ** 要继续处理，用于标记被注释的关键字）
+        # 鐠哄疇绻冪粚楦款攽閿涘牆娼″▔銊╁櫞鐞?** 鐟曚胶鎴风紒顓烆槱閻炲棴绱濋悽銊ょ艾閺嶅洩顔囩悮顐ｆ暈闁插﹦娈戦崗鎶芥暛鐎涙绱?
         if not raw_line:
             i += 1
             continue
 
-        # 行内注释：取 # 前的部分
+        # 鐞涘苯鍞村▔銊╁櫞閿涙艾褰?# 閸撳秶娈戦柈銊ュ瀻
         line = raw_line.split("#")[0].strip()
 
-        # 判断是否是块注释（** 开头）
+        # 閸掋倖鏌囬弰顖氭儊閺勵垰娼″▔銊╁櫞閿?* 瀵偓婢惰揪绱?
         is_block_comment = raw_line.startswith("**")
 
-        # 匹配关键字行（*开头），提取星号后、逗号前的完整关键字
-        # 支持多单词关键字如 SURFACE BEHAVIOR、MATERIAL DEFORMATION 等
-        # 对于块注释行（**），先去除 ** 前缀再匹配
+        # 閸栧綊鍘ら崗鎶芥暛鐎涙顢戦敍?瀵偓婢惰揪绱氶敍灞惧絹閸欐牗妲﹂崣宄版倵閵嗕線鈧褰块崜宥囨畱鐎瑰本鏆ｉ崗鎶芥暛鐎?
+        # 閺€顖涘瘮婢舵艾宕熺拠宥呭彠闁款喖鐡ф俊?SURFACE BEHAVIOR閵嗕府ATERIAL DEFORMATION 缁?
+        # 鐎甸€涚艾閸ф鏁為柌濠咁攽閿?*閿涘绱濋崗鍫濆箵闂?** 閸撳秶绱戦崘宥呭爱闁?
         match_line = line
         if is_block_comment:
-            # **KEYWORD 或 ** KEYWORD 形式，统一去除 ** 前缀
+            # **KEYWORD 閹?** KEYWORD 瑜般垹绱￠敍宀€绮烘稉鈧崢濠氭珟 ** 閸撳秶绱?
             match_line = re.sub(r"^\*\*\s*", "*", line, count=1)
 
         keyword_match = re.match(r"^\*([A-Za-z]+(?:[\s][A-Za-z]+)*)", match_line, re.IGNORECASE)
@@ -1549,22 +2397,31 @@ def _check_inp_file_quality(
             all_keywords.add(kw)
             if kw not in keyword_lines:
                 keyword_lines[kw] = []
-            keyword_lines[kw].append(i + 1)  # 行号从1开始
+            keyword_lines[kw].append(i + 1)  # 鐞涘苯褰挎禒?瀵偓婵?
 
-            # ** 开头是块注释，标记为被注释
+            # ** 瀵偓婢跺瓨妲搁崸妤佹暈闁插绱濋弽鍥唶娑撻缚顫﹀▔銊╁櫞
             if is_block_comment:
                 commented_keywords.add(kw)
             else:
-                # 有效关键字（未被注释）
+                # 閺堝鏅ラ崗鎶芥暛鐎涙绱欓張顏囶潶濞夈劑鍣撮敍?
                 active_keywords.add(kw)
 
         i += 1
 
-    # ===== 检查1：被注释的关键材料卡片 =====
+    # ===== 濡偓閺?閿涙俺顫﹀▔銊╁櫞閻ㄥ嫬鍙ч柨顔芥綏閺傛瑥宕遍悧?=====
     critical_cards = {
-        "ELASTIC": ("材料缺少弹性常数（*ELASTIC）", "在 *MATERIAL 中添加 *ELASTIC,TYPE=ISOTROPIC 定义弹性模量和泊松比"),
-        "SURFACE BEHAVIOR": ("接触行为可能缺失（*SURFACE BEHAVIOR 被注释）", "检查接触面定义，确保 *SURFACE BEHAVIOR 参数正确设置（pressure= 惩罚刚度）"),
-        "DENSITY": ("材料缺少密度定义（*DENSITY 被注释）", "动力学分析需要密度定义，在 *MATERIAL 中添加 *DENSITY"),
+        "ELASTIC": (
+            "*ELASTIC card is missing or commented out.",
+            "Add a valid *MATERIAL / *ELASTIC definition and verify units.",
+        ),
+        "SURFACE BEHAVIOR": (
+            "*SURFACE BEHAVIOR card is missing or commented out.",
+            "Define *SURFACE BEHAVIOR with pressure-overclosure settings.",
+        ),
+        "DENSITY": (
+            "*DENSITY card is missing or commented out.",
+            "Add *DENSITY under the corresponding *MATERIAL block.",
+        ),
     }
 
     for kw, (msg, suggestion) in critical_cards.items():
@@ -1574,56 +2431,70 @@ def _check_inp_file_quality(
                 severity="warning",
                 category="material",
                 message=msg,
-                location=f"{inp_file.name} 行 {line_nums[0]}",
+                location=f"{inp_file.name} 鐞?{line_nums[0]}",
                 suggestion=suggestion,
             ))
 
-    # ===== 检查2：缺少 *SOLID SECTION（材料未关联到单元） =====
+    # ===== 濡偓閺?閿涙氨宸辩亸?*SOLID SECTION閿涘牊娼楅弬娆愭弓閸忓疇浠堥崚鏉垮礋閸忓喛绱?=====
     if "ELASTIC" in active_keywords and "SOLID SECTION" not in active_keywords:
         issues.append(DiagnosticIssue(
             severity="warning",
             category="material",
-            message="检测到材料定义但缺少 *SOLID SECTION，材料可能未关联到单元",
+            message="濡偓濞村鍩岄弶鎰灐鐎规矮绠熸担鍡欏繁鐏?*SOLID SECTION閿涘本娼楅弬娆忓讲閼宠姤婀崗瀹犱粓閸掓澘宕熼崗?",
             location=inp_file.name,
-            suggestion="在 *SOLID SECTION 中指定 ELNAME=材料名称，确保材料属性关联到单元集",
+            suggestion="閸?*SOLID SECTION 娑擃厽瀵氱€?ELNAME=閺夋劖鏋￠崥宥囆為敍宀€鈥樻穱婵囨綏閺傛瑥鐫橀幀褍鍙ч懕鏂垮煂閸楁洖鍘撻梿?",
         ))
 
-    # ===== 检查3：缺少边界条件 =====
+    # ===== 濡偓閺?閿涙氨宸辩亸鎴ｇ珶閻ｅ本娼禒?=====
     if "BOUNDARY" not in active_keywords and "BOUNDARY" not in commented_keywords:
         issues.append(DiagnosticIssue(
             severity="error",
             category="boundary_condition",
-            message="INP 文件中未找到 *BOUNDARY 定义",
+            message="INP 閺傚洣娆㈡稉顓熸弓閹垫儳鍩?*BOUNDARY 鐎规矮绠?",
             location=inp_file.name,
-            suggestion="结构必须有边界条件才能求解。添加 *BOUNDARY 约束位移分量（固定端全约束或对称边界）",
+            suggestion="缂佹挻鐎箛鍛淬€忛張澶庣珶閻ｅ本娼禒鑸靛閼宠姤鐪扮憴锝冣偓鍌涘潑閸?*BOUNDARY 缁撅附娼担宥囆╅崚鍡涘櫤閿涘牆娴愮€规氨顏崗銊у閺夌喐鍨ㄧ€靛湱袨鏉堝湱鏅敍?",
         ))
 
-    # ===== 检查4：缺少分析步 =====
+    # ===== 濡偓閺?閿涙氨宸辩亸鎴濆瀻閺嬫劖顒?=====
     if "STEP" not in active_keywords and "STEP" not in commented_keywords:
         issues.append(DiagnosticIssue(
             severity="error",
             category="input_syntax",
-            message="INP 文件中未找到 *STEP 定义",
+            message="INP 閺傚洣娆㈡稉顓熸弓閹垫儳鍩?*STEP 鐎规矮绠?",
             location=inp_file.name,
-            suggestion="必须定义至少一个 *STEP 分析步。添加 *STATIC（静力分析）或 *FREQUENCY（模态分析）等",
+            suggestion="韫囧懘銆忕€规矮绠熼懛鍐茬毌娑撯偓娑?*STEP 閸掑棙鐎藉銉ｂ偓鍌涘潑閸?*STATIC閿涘牓娼ら崝娑樺瀻閺嬫劧绱氶幋?*FREQUENCY閿涘牊膩閹礁鍨庨弸鎰剁礆缁?",
         ))
+    else:
+        active_step_count = sum(1 for line in lines if line.strip().upper().startswith("*STEP"))
+        active_end_step_count = sum(1 for line in lines if line.strip().upper().startswith("*END STEP"))
+        if active_step_count > active_end_step_count:
+            issues.append(DiagnosticIssue(
+                severity="error",
+                category="input_syntax",
+                message=(
+                    f"*STEP block is not closed: found {active_step_count} *STEP "
+                    f"but only {active_end_step_count} *END STEP"
+                ),
+                location=inp_file.name,
+                suggestion="Ensure each *STEP has a matching *END STEP; append missing *END STEP at file end.",
+            ))
 
-    # ===== 检查5：载荷在 STEP 之前（常见错误） =====
+    # ===== 濡偓閺?閿涙俺娴囬懡宄版躬 STEP 娑斿澧犻敍鍫濈埗鐟欎線鏁婄拠顖ょ礆 =====
     step_line = None
     load_keywords = {"CLOAD", "DLOAD", "DFLUX", "CFLUX", "BOUNDARY"}
     for kw, lines_list in keyword_lines.items():
         if kw in load_keywords and not any(kw in c for c in commented_keywords):
             if step_line is None:
-                # 找第一个 *STEP 的位置
+                # 閹靛墽顑囨稉鈧稉?*STEP 閻ㄥ嫪缍呯純?
                 step_lines = keyword_lines.get("STEP", [float("inf")])
                 first_step = step_lines[0] if step_lines else float("inf")
                 if lines_list[0] < first_step:
                     issues.append(DiagnosticIssue(
                         severity="warning",
                         category="input_syntax",
-                        message=f"{kw} 定义在 *STEP 之前，可能无效",
-                        location=f"{inp_file.name} 行 {lines_list[0]}",
-                        suggestion="载荷和边界条件通常应定义在 *STEP 块内部（或 *STEP 之后）",
+                        message=f"{kw} 鐎规矮绠熼崷?*STEP 娑斿澧犻敍灞藉讲閼宠姤妫ら弫?",
+                        location=f"{inp_file.name} 鐞?{lines_list[0]}",
+                        suggestion="鏉炲€熷祹閸滃矁绔熼悾灞炬蒋娴犲爼鈧艾鐖舵惔鏂跨暰娑斿婀?*STEP 閸ф鍞撮柈顭掔礄閹?*STEP 娑斿鎮楅敍?",
                     ))
                     break
 
@@ -1635,13 +2506,13 @@ def _check_element_quality(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查单元质量：Jacobian 负值、Hourglass 等问题。
+    濡偓閺屻儱宕熼崗鍐窛闁插骏绱癑acobian 鐠愮喎鈧鈧笭ourglass 缁涘妫舵０妯糕偓?
 
-    扫描 .sta / .dat / .cvg 文件，使用正则匹配以下模式：
-    - NEGATIVE JACOBIAN：单元翻转或畸形
-    - HOURGLASSING：减缩积分单元的零能模式
-    - HOURGLIM：沙漏控制参数
-    - *ERROR.*element：元素相关错误
+    閹殿偅寮?.sta / .dat / .cvg 閺傚洣娆㈤敍灞煎▏閻劍顒滈崚娆忓爱闁板秳浜掓稉瀣佸蹇ョ窗
+    - NEGATIVE JACOBIAN閿涙艾宕熼崗鍐倳鏉烆剚鍨ㄩ悾绋胯埌
+    - HOURGLASSING閿涙艾鍣虹紓鈺冃濋崚鍡楀礋閸忓啰娈戦梿鎯板厴濡€崇础
+    - HOURGLIM閿涙碍鐭欏蹇斿付閸掕泛寮弫?
+    - *ERROR.*element閿涙艾鍘撶槐鐘垫祲閸忔娊鏁婄拠?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1651,29 +2522,29 @@ def _check_element_quality(
         for pattern in JACOBIAN_PATTERNS:
             match = pattern.search(text)
             if match:
-                # 根据匹配到的关键词确定具体问题类型
+                # 閺嶈宓侀崠褰掑帳閸掓壆娈戦崗鎶芥暛鐠囧秶鈥樼€规艾鍙挎担鎾绘６妫版琚崹?
                 matched_text = match.group(0).lower()
                 if "negative jacobian" in matched_text:
-                    issue_type = "Jacobian 负值"
-                    suggestion = "检查网格质量，畸形单元会导致 Jacobian 负值。尝试：1) 加密网格 2) 改善单元形状 3) 使用全积分单元替代减缩积分"
+                    issue_type = "Jacobian 鐠愮喎鈧?"
+                    suggestion = "濡偓閺屻儳缍夐弽鑹板窛闁插骏绱濋悾绋胯埌閸楁洖鍘撴导姘嚤閼?Jacobian 鐠愮喎鈧鈧倸鐨剧拠鏇窗1) 閸旂姴鐦戠純鎴炵壐 2) 閺€鐟版澖閸楁洖鍘撹ぐ銏㈠Ц 3) 娴ｈ法鏁ら崗銊濋崚鍡楀礋閸忓啯娴涙禒锝呭櫤缂傗晝袧閸?"
                 elif "hourglassing" in matched_text:
-                    issue_type = "Hourglass 模式"
-                    suggestion = "检测到沙漏/零能模式。解决：1) 加密网格 2) 使用全积分单元（如 C3D8 而非 C3D8R）3) 调整 HOURGLIM 参数"
+                    issue_type = "Hourglass 濡€崇础"
+                    suggestion = "濡偓濞村鍩屽▽娆愮础/闂嗘儼鍏樺Ο鈥崇础閵嗗倽袙閸愮绱?) 閸旂姴鐦戠純鎴炵壐 2) 娴ｈ法鏁ら崗銊濋崚鍡楀礋閸忓喛绱欐俊?C3D8 閼板矂娼?C3D8R閿?) 鐠嬪啯鏆?HOURGLIM 閸欏倹鏆?"
                 elif "hourlim" in matched_text:
-                    issue_type = "Hourglass 控制"
-                    suggestion = "沙漏控制参数异常。检查：1) 网格是否太粗 2) 是否使用了减缩积分单元"
+                    issue_type = "Hourglass 閹貉冨煑"
+                    suggestion = "濞屾瑦绱￠幒褍鍩楅崣鍌涙殶瀵倸鐖堕妴鍌涱梾閺屻儻绱?) 缂冩垶鐗搁弰顖氭儊婢额亞鐭?2) 閺勵垰鎯佹担璺ㄦ暏娴滃棗鍣虹紓鈺冃濋崚鍡楀礋閸?"
                 else:
-                    issue_type = "单元错误"
-                    suggestion = "检测到元素相关错误。检查网格质量和单元类型设置"
+                    issue_type = "閸楁洖鍘撻柨娆掝嚖"
+                    suggestion = "濡偓濞村鍩岄崗鍐閻╃鍙ч柨娆掝嚖閵嗗倹顥呴弻銉х秹閺嶈壈宸濋柌蹇撴嫲閸楁洖鍘撶猾璇茬€风拋鍓х枂"
 
                 issues.append(DiagnosticIssue(
                     severity="error",
                     category="element_quality",
-                    message=f"单元质量问题（{issue_type}）",
+                    message=f"Detected element quality issue: {issue_type}",
                     location=file_label,
                     suggestion=suggestion,
                 ))
-                break  # 每个文件只报一次
+                break  # 濮ｅ繋閲滈弬鍥︽閸欘亝濮ゆ稉鈧▎?
 
     return issues
 
@@ -1682,7 +2553,7 @@ def _check_frd_quality(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
-    """检查网格质量（通过 FrdData 统计推断）。"""
+    """濡偓閺屻儳缍夐弽鑹板窛闁插骏绱欓柅姘崇箖 FrdData 缂佺喕顓搁幒銊︽焽閿涘鈧?"""
     issues: list[DiagnosticIssue] = []
 
     try:
@@ -1696,15 +2567,15 @@ def _check_frd_quality(
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="mesh_quality",
-                    message=f"节点/单元比例过低 ({ratio:.2f})，可能存在低质量单元",
-                    suggestion="检查网格划分参数，确保没有畸形单元",
+                    message=f"閼哄倻鍋?閸楁洖鍘撳В鏂剧伐鏉╁洣缍?({ratio:.2f})閿涘苯褰查懗钘夌摠閸︺劋缍嗙拹銊╁櫤閸楁洖鍘?",
+                    suggestion="濡偓閺屻儳缍夐弽鐓庡灊閸掑棗寮弫甯礉绾喕绻氬▽鈩冩箒閻ｇ鑸伴崡鏇炲帗",
                 ))
             elif ratio > 50:
                 issues.append(DiagnosticIssue(
                     severity="info",
                     category="mesh_quality",
-                    message=f"节点/单元比例较高 ({ratio:.2f})",
-                    suggestion="考虑加密网格以提高精度",
+                    message=f"閼哄倻鍋?閸楁洖鍘撳В鏂剧伐鏉堝啴鐝?({ratio:.2f})",
+                    suggestion="閼板啳妾婚崝鐘茬槕缂冩垶鐗告禒銉﹀絹妤傛绨挎惔?",
                 ))
 
         if summary.disp_count > 0 and summary.disp_sum > 0:
@@ -1714,8 +2585,8 @@ def _check_frd_quality(
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="mesh_quality",
-                    message=f"位移分布极不均匀，最大/平均 = {max_disp/mean_disp:.1f}x",
-                    suggestion="可能存在应力集中或边界条件错误",
+                    message=f"娴ｅ秶些閸掑棗绔烽弸浣风瑝閸у洤瀵戦敍灞炬付婢?楠炲啿娼?= {max_disp/mean_disp:.1f}x",
+                    suggestion="閸欘垵鍏樼€涙ê婀惔鏂垮闂嗗棔鑵戦幋鏍珶閻ｅ本娼禒鍫曟晩鐠?",
                 ))
 
     except Exception:
@@ -1728,7 +2599,7 @@ def _check_stress_gradient(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
-    """检查应力集中：应力梯度突变 > 50x。"""
+    """濡偓閺屻儱绨查崝娑㈡肠娑擃叏绱版惔鏂垮濮婎垰瀹崇粣浣稿綁 > 50x閵?"""
     issues: list[DiagnosticIssue] = []
 
     try:
@@ -1745,8 +2616,8 @@ def _check_stress_gradient(
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="stress_concentration",
-                    message=f"应力梯度极大（差异 > 50x），可能存在应力集中",
-                    suggestion="在应力集中区域加密网格，或优化几何形状",
+                    message=f"鎼存柨濮忓顖氬閺嬩礁銇囬敍鍫濇▕瀵?> 50x閿涘绱濋崣顖濆厴鐎涙ê婀惔鏂垮闂嗗棔鑵?",
+                    suggestion="閸︺劌绨查崝娑㈡肠娑擃厼灏崺鐔峰鐎靛棛缍夐弽纭风礉閹存牔绱崠鏍у殤娴ｆ洖鑸伴悩?",
                 ))
 
     except Exception:
@@ -1759,7 +2630,7 @@ def _check_displacement_range(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
-    """检查位移范围：最大位移 > 模型尺寸 10%。"""
+    """濡偓閺屻儰缍呯粔鏄忓瘱閸ヨ揪绱伴張鈧径褌缍呯粔?> 濡€崇€风亸鍝勵嚟 10%閵?"""
     issues: list[DiagnosticIssue] = []
 
     try:
@@ -1771,22 +2642,22 @@ def _check_displacement_range(
         bx, by, bz = stats["model_bounds"]
         model_size = max(bx, by, bz)
 
-        # 数值溢出检测：位移 > 1e10 是求解未收敛的标志
+        # 閺佹澘鈧吋瀛╅崙鐑橆梾濞村绱版担宥囆?> 1e10 閺勵垱鐪扮憴锝嗘弓閺€鑸垫殐閻ㄥ嫭鐖ｈ箛?
         if max_disp > 1e10:
             issues.append(DiagnosticIssue(
                 severity="error",
                 category="displacement",
-                message=f"最大位移异常巨大（{max_disp:.2e}），疑似数值溢出",
-                suggestion="求解可能未收敛。检查：1) 接触设置是否正确 2) 载荷步是否合理 3) 网格是否过于畸形",
+                message=f"閺堚偓婢堆傜秴缁夎绱撶敮绋挎硶婢堆嶇礄{max_disp:.2e}閿涘绱濋悿鎴滄妧閺佹澘鈧吋瀛╅崙?",
+                suggestion="濮瑰倽袙閸欘垵鍏橀張顏呮暪閺佹稏鈧倹顥呴弻銉窗1) 閹恒儴袝鐠佸墽鐤嗛弰顖氭儊濮濓絿鈥?2) 鏉炲€熷祹濮濄儲妲搁崥锕€鎮庨悶?3) 缂冩垶鐗搁弰顖氭儊鏉╁洣绨悾绋胯埌",
             ))
-            return issues  # 数值溢出的情况下不继续判断刚度问题
+            return issues  # 閺佹澘鈧吋瀛╅崙铏规畱閹懎鍠屾稉瀣╃瑝缂佈呯敾閸掋倖鏌囬崚姘闂傤噣顣?
 
         if model_size > 0 and max_disp / model_size > 0.1:
             issues.append(DiagnosticIssue(
                 severity="warning",
                 category="displacement",
-                message=f"最大位移 ({max_disp:.2e}) 超过模型尺寸的 10%，可能刚度不足",
-                suggestion="考虑增加厚度、添加肋板或使用更高强度材料",
+                message=f"閺堚偓婢堆傜秴缁?({max_disp:.2e}) 鐡掑懓绻冨Ο鈥崇€风亸鍝勵嚟閻?10%閿涘苯褰查懗钘夊灠鎼达缚绗夌搾?",
+                suggestion="閼板啳妾绘晶鐐插閸樻艾瀹抽妴浣瑰潑閸旂姾鍊犻弶鎸庡灗娴ｈ法鏁ら弴鎾彯瀵搫瀹抽弶鎰灐",
             ))
 
     except Exception:
@@ -1801,20 +2672,20 @@ def _check_large_strain(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查大变形：应变分量 > 0.1（10%应变）时判断是否启用了几何非线性。
+    濡偓閺屻儱銇囬崣妯鸿埌閿涙艾绨查崣妯哄瀻闁?> 0.1閿?0%鎼存柨褰夐敍澶嬫閸掋倖鏌囬弰顖氭儊閸氼垳鏁ゆ禍鍡楀殤娴ｆ洟娼痪鎸庘偓褋鈧?
 
-    规则：
-    - 应变分量 > 0.1 且 inp 无 NLGEOM → warning: 建议启用几何非线性
-    - 应变分量 > 0.1 且 inp 有 NLGEOM → info: 大变形分析，应变为拉格朗日定义
-    - NLGEOM 检测支持两种格式：*STEP, NLGEOM 和 *STEP,NLGEOM（无空格）
+    鐟欏嫬鍨敍?
+    - 鎼存柨褰夐崚鍡涘櫤 > 0.1 娑?inp 閺?NLGEOM 閳?warning: 瀵ら缚顔呴崥顖滄暏閸戠姳缍嶉棃鐐靛殠閹?
+    - 鎼存柨褰夐崚鍡涘櫤 > 0.1 娑?inp 閺?NLGEOM 閳?info: 婢堆冨綁瑜般垹鍨庨弸鎰剁礉鎼存柨褰夋稉鐑樺閺嶅吋婀曢弮銉ョ暰娑?
+    - NLGEOM 濡偓濞村鏁幐浣疯⒈缁夊秵鐗稿蹇ョ窗*STEP, NLGEOM 閸?*STEP,NLGEOM閿涘牊妫ょ粚鐑樼壐閿?
     """
     issues: list[DiagnosticIssue] = []
 
-    # 1. 检查 inp 文件是否有 NLGEOM
+    # 1. 濡偓閺?inp 閺傚洣娆㈤弰顖氭儊閺?NLGEOM
     has_nlgeom = False
     inp_text = _get_inp_text(inp_file, ctx=ctx)
     if inp_text:
-        # 支持 *STEP, NLGEOM 和 *STEP,NLGEOM 两种格式
+        # 閺€顖涘瘮 *STEP, NLGEOM 閸?*STEP,NLGEOM 娑撱倗顫掗弽鐓庣础
         has_nlgeom = bool(re.search(r"\*STEP\s*,\s*NLGEOM", inp_text, re.IGNORECASE))
 
     try:
@@ -1824,23 +2695,23 @@ def _check_large_strain(
         if summary.max_strain <= 0:
             return issues
 
-        # 3. 根据阈值判断
+        # 3. 閺嶈宓侀梼鍫濃偓鐓庡灲閺?
         if summary.max_strain > 0.1:
             if has_nlgeom:
                 issues.append(DiagnosticIssue(
                     severity="info",
                     category="large_strain",
-                    message=f"检测到大变形（{summary.max_strain_component}={summary.max_strain:.4f}），分析已启用几何非线性（NLGEOM），应变输出为拉格朗日定义",
-                    location=f"节点 {summary.max_strain_node}",
-                    suggestion="结果为格林/拉格朗日应变，非线性应变值本身是合理的",
+                    message=f"濡偓濞村鍩屾径褍褰夎ぐ顫礄{summary.max_strain_component}={summary.max_strain:.4f}閿涘绱濋崚鍡樼€藉鎻掓儙閻劌鍤戞担鏇㈡姜缁炬寧鈧嶇礄NLGEOM閿涘绱濇惔鏂垮綁鏉堟挸鍤稉鐑樺閺嶅吋婀曢弮銉ョ暰娑?",
+                    location=f"閼哄倻鍋?{summary.max_strain_node}",
+                    suggestion="缂佹挻鐏夋稉鐑樼壐閺?閹峰鐗搁張妤佹）鎼存柨褰夐敍宀勬姜缁炬寧鈧冪安閸欐ê鈧吋婀伴煬顐ｆЦ閸氬牏鎮婇惃?",
                 ))
             else:
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="large_strain",
-                    message=f"检测到大变形（{summary.max_strain_component}={summary.max_strain:.4f}），但 inp 文件未启用几何非线性（NLGEOM）",
-                    location=f"节点 {summary.max_strain_node}",
-                    suggestion="在 *STEP 行添加 NLGEOM 参数以启用几何非线性分析：*STEP, NLGEOM",
+                    message=f"濡偓濞村鍩屾径褍褰夎ぐ顫礄{summary.max_strain_component}={summary.max_strain:.4f}閿涘绱濇担?inp 閺傚洣娆㈤張顏勬儙閻劌鍤戞担鏇㈡姜缁炬寧鈧嶇礄NLGEOM閿?",
+                    location=f"閼哄倻鍋?{summary.max_strain_node}",
+                    suggestion="閸?*STEP 鐞涘本鍧婇崝?NLGEOM 閸欏倹鏆熸禒銉ユ儙閻劌鍤戞担鏇㈡姜缁炬寧鈧冨瀻閺嬫劧绱?STEP, NLGEOM",
                 ))
 
     except Exception:
@@ -1850,7 +2721,7 @@ def _check_large_strain(
 
 
 # ------------------------------------------------------------------ #
-# 材料屈服强度提取（单位：Pa）
+# 閺夋劖鏋＄仦鍫熸箛瀵搫瀹抽幓鎰絿閿涘牆宕熸担宥忕窗Pa閿?
 # ------------------------------------------------------------------ #
 
 def _extract_yield_strength(
@@ -1858,15 +2729,15 @@ def _extract_yield_strength(
     ctx: Optional[DiagnosisContext] = None,
 ) -> Optional[float]:
     """
-    从 inp 文件提取材料屈服强度。
+    娴?inp 閺傚洣娆㈤幓鎰絿閺夋劖鏋＄仦鍫熸箛瀵搫瀹抽妴?
 
-    支持的材料定义：
-    - *DEFORMATION PLASTICITY：E, nu, sigma_y, n, angle → 取第三参数 sigma_y（单位 MPa）
-    - *PLASTIC：需解析多行，默认取第一个屈服点（单位 MPa）
-    - *ELASTIC：无法获取屈服强度，返回 None
+    閺€顖涘瘮閻ㄥ嫭娼楅弬娆忕暰娑斿绱?
+    - *DEFORMATION PLASTICITY閿涙, nu, sigma_y, n, angle 閳?閸欐牜顑囨稉澶婂棘閺?sigma_y閿涘牆宕熸担?MPa閿?
+    - *PLASTIC閿涙岸娓剁憴锝嗙€芥径姘愁攽閿涘矂绮拋銈呭絿缁楊兛绔存稉顏勭溁閺堝秶鍋ｉ敍鍫濆礋娴?MPa閿?
+    - *ELASTIC閿涙碍妫ゅ▔鏇″箯閸欐牕鐪婚張宥呭繁鎼达讣绱濇潻鏂挎礀 None
 
     Returns:
-        屈服强度（Pa），无法提取时返回 None
+        鐏炲牊婀囧鍝勫閿涘湧a閿涘绱濋弮鐘崇《閹绘劕褰囬弮鎯扮箲閸?None
     """
     target = inp_file or (ctx.inp_file if ctx else None)
     if not target or not target.exists():
@@ -1886,15 +2757,15 @@ def _extract_yield_strength(
             if i + 1 < len(lines):
                 parts = re.findall(r'[+-]?\d+\.?\d*(?:[eE][-+]?\d+)?', lines[i + 1])
                 if len(parts) >= 3:
-                    # sigma_y 单位是 MPa，转换为 Pa
+                    # sigma_y 閸楁洑缍呴弰?MPa閿涘矁娴嗛幑顫礋 Pa
                     result = float(parts[2]) * 1e6
                     break
             i += 1
             continue
 
-        # *PLASTIC: 屈服应力（第一列），单位 MPa
+        # *PLASTIC: 鐏炲牊婀囨惔鏂垮閿涘牏顑囨稉鈧崚妤嬬礆閿涘苯宕熸担?MPa
         if line.upper().startswith("*PLASTIC"):
-            # 读取后续非注释行，取第一个数据行的第一列
+            # 鐠囪褰囬崥搴ｇ敾闂堢偞鏁為柌濠咁攽閿涘苯褰囩粭顑跨娑擃亝鏆熼幑顔款攽閻ㄥ嫮顑囨稉鈧崚?
             i += 1
             while i < len(lines):
                 data_line = lines[i].strip()
@@ -1903,7 +2774,7 @@ def _extract_yield_strength(
                     continue
                 parts = re.findall(r'[+-]?\d+\.?\d*(?:[eE][-+]?\d+)?', data_line)
                 if parts:
-                    # 单位 MPa，转换为 Pa
+                    # 閸楁洑缍?MPa閿涘矁娴嗛幑顫礋 Pa
                     result = float(parts[0]) * 1e6
                     break
                 i += 1
@@ -1911,7 +2782,7 @@ def _extract_yield_strength(
                 break
             continue
 
-        # *ELASTIC 只有 E 和 nu，无法获取屈服强度
+        # *ELASTIC 閸欘亝婀?E 閸?nu閿涘本妫ゅ▔鏇″箯閸欐牕鐪婚張宥呭繁鎼?
         if line.upper().startswith("*ELASTIC"):
             break
 
@@ -1923,7 +2794,7 @@ def _extract_yield_strength(
 
 
 # ------------------------------------------------------------------ #
-# 刚体模式 & 材料屈服检测
+# 閸掓矮缍嬪Ο鈥崇础 & 閺夋劖鏋＄仦鍫熸箛濡偓濞?
 # ------------------------------------------------------------------ #
 
 def _check_rigid_body_mode(
@@ -1932,12 +2803,12 @@ def _check_rigid_body_mode(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查刚体模式：位移非零但应力几乎为零。
+    濡偓閺屻儱鍨版担鎾茨佸蹇ョ窗娴ｅ秶些闂堢偤娴傛担鍡楃安閸旀稑鍤戞稊搴濊礋闂嗚翰鈧?
 
-    判断逻辑：
-    - 最大位移 > 模型尺寸的 1% 且 最大 von Mises 应力 < 屈服强度的 0.01
-    - 注意：刚体运动的特征是"整体"应力很低，用最大应力而不是平均应力更准确
-    - 避免粗网格下应力插值误差导致的误报
+    閸掋倖鏌囬柅鏄忕帆閿?
+    - 閺堚偓婢堆傜秴缁?> 濡€崇€风亸鍝勵嚟閻?1% 娑?閺堚偓婢?von Mises 鎼存柨濮?< 鐏炲牊婀囧鍝勫閻?0.01
+    - 濞夈劍鍓伴敍姘灠娴ｆ捁绻嶉崝銊ф畱閻楃懓绶涢弰?閺佺繝缍?鎼存柨濮忓鍫滅秵閿涘瞼鏁ら張鈧径褍绨查崝娑溾偓灞肩瑝閺勵垰閽╅崸鍥х安閸旀稒娲块崙鍡欌€?
+    - 闁灝鍘ょ划妤冪秹閺嶉棿绗呮惔鏂垮閹绘帒鈧壈顕ゅ顔碱嚤閼峰娈戠拠顖涘Г
     """
     issues: list[DiagnosticIssue] = []
 
@@ -1949,28 +2820,28 @@ def _check_rigid_body_mode(
         max_disp = stats["max_displacement"]
         model_size = max(*stats["model_bounds"], 1e-10)
 
-        # 位移太小（< 模型尺寸 0.5%）不算刚体模式
+        # 娴ｅ秶些婢额亜鐨敍? 濡€崇€风亸鍝勵嚟 0.5%閿涘绗夌粻妤€鍨版担鎾茨佸?
         if max_disp < model_size * 0.005:
             return issues
 
-        # 获取最大应力
+        # 閼惧嘲褰囬張鈧径褍绨查崝?
         max_stress = stats["max_stress"]
         if max_stress <= 0:
             return issues
 
-        # 从 inp 获取屈服强度
+        # 娴?inp 閼惧嘲褰囩仦鍫熸箛瀵搫瀹?
         yield_strength = _extract_yield_strength(inp_file, ctx=ctx)
         if yield_strength is None:
-            yield_strength = 250e6  # 默认结构钢
+            yield_strength = 250e6  # 姒涙顓荤紒鎾寸€柦?
 
-        # 最大应力 < 屈服强度的 0.01（1%）认为是刚体运动
+        # 閺堚偓婢堆冪安閸?< 鐏炲牊婀囧鍝勫閻?0.01閿?%閿涘顓绘稉鐑樻Ц閸掓矮缍嬫潻鎰З
         if max_disp > model_size * 0.01 and max_stress < yield_strength * 0.01:
             issues.append(DiagnosticIssue(
                 severity="warning",
                 category="rigid_body_mode",
-                message=f"检测到刚体运动：最大位移较大（{max_disp:.2e}）但最大应力很低（{max_stress:.2e} Pa），可能存在欠约束",
-                location=f"最大应力/屈服强度比: {max_stress/yield_strength:.4e}",
-                suggestion="检查边界条件：确保结构被完全约束（尤其旋转自由度），所有位移分量都被限制",
+                message=f"Large displacement with low stress detected (disp={max_disp:.2e}, stress={max_stress:.2e} Pa).",
+                location=f"閺堚偓婢堆冪安閸?鐏炲牊婀囧鍝勫濮? {max_stress/yield_strength:.4e}",
+                suggestion="濡偓閺屻儴绔熼悾灞炬蒋娴犺绱扮涵顔荤箽缂佹挻鐎悮顐㈢暚閸忋劎瀹抽弶鐕傜礄鐏忋倕鍙鹃弮瀣祮閼奉亞鏁辨惔锔肩礆閿涘本澧嶉張澶夌秴缁夎鍨庨柌蹇涘厴鐞氼偊妾洪崚?",
             ))
 
     except Exception:
@@ -1985,11 +2856,11 @@ def _check_material_yield(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查材料是否屈服：最大应力是否超过屈服强度。
+    濡偓閺屻儲娼楅弬娆愭Ц閸氾箑鐪婚張宥忕窗閺堚偓婢堆冪安閸旀稒妲搁崥锕佺Т鏉╁洤鐪婚張宥呭繁鎼达负鈧?
 
-    判断逻辑：
-    - 最大 von Mises 应力 > 屈服强度 → warning: 材料屈服
-    - 最大 von Mises 应力 > 屈服强度 * 1.5 → error: 严重屈服
+    閸掋倖鏌囬柅鏄忕帆閿?
+    - 閺堚偓婢?von Mises 鎼存柨濮?> 鐏炲牊婀囧鍝勫 閳?warning: 閺夋劖鏋＄仦鍫熸箛
+    - 閺堚偓婢?von Mises 鎼存柨濮?> 鐏炲牊婀囧鍝勫 * 1.5 閳?error: 娑撱儵鍣哥仦鍫熸箛
     """
     issues: list[DiagnosticIssue] = []
 
@@ -2004,8 +2875,8 @@ def _check_material_yield(
 
         yield_strength = _extract_yield_strength(inp_file, ctx=ctx)
         if yield_strength is None:
-            # 线弹性材料（*ELASTIC）无屈服强度定义，跳过屈服检查
-            log.info("线弹性材料，无屈服强度定义，跳过屈服检查")
+            # 缁惧灝鑴婇幀褎娼楅弬娆欑礄*ELASTIC閿涘妫ょ仦鍫熸箛瀵搫瀹崇€规矮绠熼敍宀冪儲鏉╁洤鐪婚張宥嗩梾閺?
+            log.info("缁惧灝鑴婇幀褎娼楅弬娆欑礉閺冪姴鐪婚張宥呭繁鎼达箑鐣炬稊澶涚礉鐠哄疇绻冪仦鍫熸箛濡偓閺?")
             return issues
 
         ratio = max_stress / yield_strength
@@ -2014,15 +2885,15 @@ def _check_material_yield(
             issues.append(DiagnosticIssue(
                 severity="error",
                 category="material_yield",
-                message=f"材料严重屈服：最大应力（{max_stress:.2e} Pa）是屈服强度（{yield_strength:.2e} Pa）的 {ratio:.1f}x",
-                suggestion="1) 检查载荷是否超出设计值 2) 考虑增加材料厚度或使用更高强度材料 3) 检查载荷方向和边界条件是否正确",
+                message=f"Max stress exceeds yield strength (stress={max_stress:.2e} Pa, yield={yield_strength:.2e} Pa, ratio={ratio:.1f}x).",
+                suggestion="1) 濡偓閺屻儴娴囬懡閿嬫Ц閸氾箒绉撮崙楦款啎鐠佲€斥偓?2) 閼板啳妾绘晶鐐插閺夋劖鏋￠崢姘閹存牔濞囬悽銊︽纯妤傛ê宸辨惔锔芥綏閺?3) 濡偓閺屻儴娴囬懡閿嬫煙閸氭垵鎷版潏鍦櫕閺夆€叉閺勵垰鎯佸锝団€?",
             ))
         elif ratio > 1.0:
             issues.append(DiagnosticIssue(
                 severity="warning",
                 category="material_yield",
-                message=f"材料屈服：最大应力（{max_stress:.2e} Pa）超过屈服强度（{yield_strength:.2e} Pa）的 {ratio:.1f}x",
-                suggestion="检查载荷是否超出设计值，考虑增加材料厚度或使用更高强度材料",
+                message=f"閺夋劖鏋＄仦鍫熸箛閿涙碍娓舵径褍绨查崝娑崇礄{max_stress:.2e} Pa閿涘绉存潻鍥х溁閺堝秴宸辨惔锔肩礄{yield_strength:.2e} Pa閿涘娈?{ratio:.1f}x",
+                suggestion="濡偓閺屻儴娴囬懡閿嬫Ц閸氾箒绉撮崙楦款啎鐠佲€斥偓纭风礉閼板啳妾绘晶鐐插閺夋劖鏋￠崢姘閹存牔濞囬悽銊︽纯妤傛ê宸辨惔锔芥綏閺?",
             ))
 
     except Exception:
@@ -2037,16 +2908,16 @@ def _check_unit_consistency(
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
     """
-    检查单位一致性：应力值量级是否合理。
+    濡偓閺屻儱宕熸担宥勭閼峰瓨鈧嶇窗鎼存柨濮忛崐濂稿櫤缁狙勬Ц閸氾箑鎮庨悶鍡愨偓?
 
-    判断逻辑：
-    - 正常结构应力范围：1e2 ~ 1e9 Pa（100 Pa ~ 1 GPa）
-    - < 1e0 (1 Pa)：可能是单位搞错了（应该用 MPa）
-    - > 1e12 (1 TPa)：物理上不可能，正常材料不会达到这个量级
+    閸掋倖鏌囬柅鏄忕帆閿?
+    - 濮濓絽鐖剁紒鎾寸€惔鏂垮閼煎啫娲块敍?e2 ~ 1e9 Pa閿?00 Pa ~ 1 GPa閿?
+    - < 1e0 (1 Pa)閿涙艾褰查懗鑺ユЦ閸楁洑缍呴幖鐐烘晩娴滃棴绱欐惔鏃囶嚉閻?MPa閿?
+    - > 1e12 (1 TPa)閿涙氨澧块悶鍡曠瑐娑撳秴褰查懗鏂ょ礉濮濓絽鐖堕弶鎰灐娑撳秳绱版潏鎯у煂鏉╂瑤閲滈柌蹇曢獓
 
-    常见单位错误：
-    - 材料 E 用 MPa，但载荷用 N，直接导致应力结果差 1e6 倍
-    - 几何尺寸 mm vs m 不一致
+    鐢瓕顫嗛崡鏇氱秴闁挎瑨顕ら敍?
+    - 閺夋劖鏋?E 閻?MPa閿涘奔绲炬潪鍊熷祹閻?N閿涘瞼娲块幒銉ヮ嚤閼锋潙绨查崝娑氱波閺嬫粌妯?1e6 閸?
+    - 閸戠姳缍嶇亸鍝勵嚟 mm vs m 娑撳秳绔撮懛?
     """
     issues: list[DiagnosticIssue] = []
 
@@ -2059,27 +2930,27 @@ def _check_unit_consistency(
         if max_stress <= 0:
             return issues
 
-        # 检查量级异常
+        # 濡偓閺屻儵鍣虹痪褍绱撶敮?
         if max_stress < 1.0:
             issues.append(DiagnosticIssue(
                 severity="warning",
                 category="unit_consistency",
-                message=f"最大应力极低（{max_stress:.2e} Pa），可能存在单位不一致",
-                suggestion="检查材料参数单位：E/nu 通常用 MPa，长度用 mm，确保载荷单位一致",
+                message=f"閺堚偓婢堆冪安閸旀稒鐎担搴礄{max_stress:.2e} Pa閿涘绱濋崣顖濆厴鐎涙ê婀崡鏇氱秴娑撳秳绔撮懛?",
+                suggestion="濡偓閺屻儲娼楅弬娆忓棘閺佹澘宕熸担宥忕窗E/nu 闁艾鐖堕悽?MPa閿涘矂鏆辨惔锔炬暏 mm閿涘瞼鈥樻穱婵婃祰閼藉嘲宕熸担宥勭閼?",
             ))
         elif max_stress > 1e12:
             issues.append(DiagnosticIssue(
                 severity="error",
                 category="unit_consistency",
-                message=f"最大应力异常巨大（{max_stress:.2e} Pa），可能存在单位严重不一致",
-                suggestion="检查所有单位：材料用 MPa 时，几何必须用 mm，载荷用 N",
+                message=f"閺堚偓婢堆冪安閸旀稑绱撶敮绋挎硶婢堆嶇礄{max_stress:.2e} Pa閿涘绱濋崣顖濆厴鐎涙ê婀崡鏇氱秴娑撱儵鍣告稉宥勭閼?",
+                suggestion="濡偓閺屻儲澧嶉張澶婂礋娴ｅ稄绱伴弶鎰灐閻?MPa 閺冭绱濋崙鐘辩秿韫囧懘銆忛悽?mm閿涘矁娴囬懡椋庢暏 N",
             ))
 
-        # 额外检查：从 inp 推断期望的单位范围
-        # 如果材料 E > 1e8 (> 100 GPa)，而应力 < 1e6 (< 1 MPa)，可能单位混乱
+        # 妫版繂顦诲Λ鈧弻銉窗娴?inp 閹恒劍鏌囬張鐔告箿閻ㄥ嫬宕熸担宥堝瘱閸?
+        # 婵″倹鐏夐弶鎰灐 E > 1e8 (> 100 GPa)閿涘矁鈧苯绨查崝?< 1e6 (< 1 MPa)閿涘苯褰查懗钘夊礋娴ｅ秵璐╂稊?
         inp_lines = _get_inp_lines(inp_file, ctx=ctx)
         if inp_lines:
-            # 提取 E 值（单位 MPa）
+            # 閹绘劕褰?E 閸婄》绱欓崡鏇氱秴 MPa閿?
             E_value = None
             for i, line in enumerate(inp_lines):
                 if line.upper().startswith("*ELASTIC"):
@@ -2093,8 +2964,8 @@ def _check_unit_consistency(
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="unit_consistency",
-                    message=f"材料弹性模量 E={E_value:.2e} MPa 与应力结果不匹配，可能单位不一致",
-                    suggestion="如果 E 用 Pa 而非 MPa，会导致应力结果偏小 1e6 倍。请确认 E 单位是 MPa，尺寸单位是 mm。",
+                    message=f"閺夋劖鏋″瑙勨偓褎膩闁?E={E_value:.2e} MPa 娑撳骸绨查崝娑氱波閺嬫粈绗夐崠褰掑帳閿涘苯褰查懗钘夊礋娴ｅ秳绗夋稉鈧懛?",
+                    suggestion="婵″倹鐏?E 閻?Pa 閼板矂娼?MPa閿涘奔绱扮€佃壈鍤ф惔鏂垮缂佹挻鐏夐崑蹇撶毈 1e6 閸婂秲鈧倽顕涵顔款吇 E 閸楁洑缍呴弰?MPa閿涘苯鏄傜€电宕熸担宥嗘Ц mm閵?",
                 ))
 
     except Exception:
@@ -2104,7 +2975,7 @@ def _check_unit_consistency(
 
 
 # ------------------------------------------------------------------ #
-# Level 2: 参考案例对比
+# Level 2: 閸欏倽鈧啯顢嶆笟瀣嚠濮?
 # ------------------------------------------------------------------ #
 
 def _check_reference_cases(
@@ -2113,12 +2984,12 @@ def _check_reference_cases(
     ctx: Optional[DiagnosisContext] = None,
 ) -> dict:
     """
-    与参考案例库对比，检查结果是否在合理范围内。
+    娑撳骸寮懓鍐╊攳娓氬绨辩€佃鐦敍灞绢梾閺屻儳绮ㄩ弸婊勬Ц閸氾箑婀崥鍫㈡倞閼煎啫娲块崘鍛偓?
 
     Returns:
         {
             "issues": list[DiagnosticIssue],
-            "similar_cases": list[dict],  # 相似案例信息
+            "similar_cases": list[dict],  # 閻╅晲鎶€濡楀牅绶ユ穱鈩冧紖
         }
     """
     issues: list[DiagnosticIssue] = []
@@ -2134,7 +3005,7 @@ def _check_reference_cases(
     try:
         user_meta = parse_inp_metadata(inp_file)
 
-        # 两阶段检索
+        # 娑撱倝妯佸▓鍨梾缁?
         similar = db.find_similar(user_meta, top_n=3)
 
         for ref_case, score in similar:
@@ -2149,11 +3020,11 @@ def _check_reference_cases(
             }
             similar_cases.append(case_info)
 
-        # 与相似案例对比结果
+        # 娑撳海娴夋导鍏碱攳娓氬顕В鏃傜波閺?
         issues.extend(_compare_with_reference(results_dir, similar, ctx=ctx))
 
     except Exception as e:
-        log.warning("参考案例对比失败: %s", e)
+        log.warning("閸欏倽鈧啯顢嶆笟瀣嚠濮ｆ柨銇戠拹? %s", e)
 
     return {"issues": issues, "similar_cases": similar_cases}
 
@@ -2163,7 +3034,7 @@ def _compare_with_reference(
     similar_cases: list[tuple[CaseMetadata, float]],
     ctx: Optional[DiagnosisContext] = None,
 ) -> list[DiagnosticIssue]:
-    """将用户结果与相似案例的预期范围对比。"""
+    """鐏忓棛鏁ら幋椋庣波閺嬫粈绗岄惄闀愭妧濡楀牅绶ラ惃鍕暕閺堢喕瀵栭崶鏉戭嚠濮ｆ柣鈧?"""
     issues: list[DiagnosticIssue] = []
 
     try:
@@ -2174,48 +3045,48 @@ def _compare_with_reference(
         user_stress_max = stats["max_stress"]
 
         for ref_case, score in similar_cases:
-            # 对比位移
+            # 鐎佃鐦担宥囆?
             if ref_case.expected_disp_max and ref_case.expected_disp_max > 0:
                 ratio = user_disp_max / ref_case.expected_disp_max
                 if ratio > 10:
                     issues.append(DiagnosticIssue(
                         severity="warning",
                         category="reference_comparison",
-                        message=f"最大位移是同类参考案例的 {ratio:.1f}x（案例: {ref_case.name}）",
-                        location=f"案例相似度: {score*100:.0f}%",
-                        suggestion="检查边界条件是否与参考案例一致，或载荷是否过大",
+                        message=f"閺堚偓婢堆傜秴缁夌粯妲搁崥宀€琚崣鍌濃偓鍐╊攳娓氬娈?{ratio:.1f}x閿涘牊顢嶆笟? {ref_case.name}閿?",
+                        location=f"濡楀牅绶ラ惄闀愭妧鎼? {score*100:.0f}%",
+                        suggestion="濡偓閺屻儴绔熼悾灞炬蒋娴犺埖妲搁崥锔跨瑢閸欏倽鈧啯顢嶆笟瀣╃閼疯揪绱濋幋鏍祰閼介攱妲搁崥锕佺箖婢?",
                     ))
                     break
                 elif ratio < 0.1 and ratio > 0:
                     issues.append(DiagnosticIssue(
                         severity="info",
                         category="reference_comparison",
-                        message=f"最大位移是同类参考案例的 {ratio:.1f}x（案例: {ref_case.name}），可能刚度过高",
-                        location=f"案例相似度: {score*100:.0f}%",
-                        suggestion="结果偏小，可能需要检查载荷是否正确施加",
+                        message=f"閺堚偓婢堆傜秴缁夌粯妲搁崥宀€琚崣鍌濃偓鍐╊攳娓氬娈?{ratio:.1f}x閿涘牊顢嶆笟? {ref_case.name}閿涘绱濋崣顖濆厴閸掓艾瀹虫潻鍥彯",
+                        location=f"濡楀牅绶ラ惄闀愭妧鎼? {score*100:.0f}%",
+                        suggestion="缂佹挻鐏夐崑蹇撶毈閿涘苯褰查懗浠嬫付鐟曚焦顥呴弻銉ㄦ祰閼介攱妲搁崥锔筋劀绾喗鏌﹂崝?",
                     ))
 
-            # 对比应力
+            # 鐎佃鐦惔鏂垮
             if ref_case.expected_stress_max and ref_case.expected_stress_max > 0 and user_stress_max > 0:
                 stress_ratio = user_stress_max / ref_case.expected_stress_max
                 if stress_ratio > 10:
                     issues.append(DiagnosticIssue(
                         severity="warning",
                         category="reference_comparison",
-                        message=f"最大应力是同类参考案例的 {stress_ratio:.1f}x（案例: {ref_case.name}）",
-                        location=f"案例相似度: {score*100:.0f}%",
-                        suggestion="检查材料参数是否正确，或是否存在应力集中",
+                        message=f"閺堚偓婢堆冪安閸旀稒妲搁崥宀€琚崣鍌濃偓鍐╊攳娓氬娈?{stress_ratio:.1f}x閿涘牊顢嶆笟? {ref_case.name}閿?",
+                        location=f"濡楀牅绶ラ惄闀愭妧鎼? {score*100:.0f}%",
+                        suggestion="濡偓閺屻儲娼楅弬娆忓棘閺佺増妲搁崥锔筋劀绾噯绱濋幋鏍ㄦЦ閸氾箑鐡ㄩ崷銊ョ安閸旀盯娉︽稉?",
                     ))
                     break
 
     except Exception as e:
-        log.warning("对比参考案例时出错: %s", e)
+        log.warning("鐎佃鐦崣鍌濃偓鍐╊攳娓氬妞傞崙娲晩: %s", e)
 
     return issues
 
 
 def _get_max_stress(frd_data) -> float:
-    """从 FrdData 获取最大应力。"""
+    """娴?FrdData 閼惧嘲褰囬張鈧径褍绨查崝娑栤偓?"""
     stress_result = frd_data.get_result("STRESS")
     if not stress_result or not stress_result.values:
         return 0.0
@@ -2223,7 +3094,7 @@ def _get_max_stress(frd_data) -> float:
     max_stress = 0.0
     for vals in stress_result.values.values():
         if len(vals) >= 4:
-            # 取 von Mises（假设第4个分量是等效应力）
+            # 閸?von Mises閿涘牆浜ｇ拋鍓ь儑4娑擃亜鍨庨柌蹇旀Ц缁涘鏅ユ惔鏂垮閿?
             max_stress = max(max_stress, abs(vals[3]))
         elif vals:
             max_stress = max(max_stress, max(abs(v) for v in vals))
@@ -2234,7 +3105,7 @@ def _get_max_displacement(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> Optional[float]:
-    """从 FRD 文件提取用户最大位移，用于参考案例对比。"""
+    """娴?FRD 閺傚洣娆㈤幓鎰絿閻劍鍩涢張鈧径褌缍呯粔浼欑礉閻劋绨崣鍌濃偓鍐╊攳娓氬顕В鏂烩偓?"""
     try:
         frd_data = _get_frd_data(results_dir, ctx=ctx)
         if frd_data is None:
@@ -2256,7 +3127,7 @@ def _get_max_displacement(
 
 
 # ------------------------------------------------------------------ #
-# Level 3: AI 诊断
+# Level 3: AI 鐠囧﹥鏌?
 # ------------------------------------------------------------------ #
 
 def _run_ai_diagnosis(
@@ -2269,11 +3140,12 @@ def _run_ai_diagnosis(
     stream: bool = True,
     ctx: Optional[DiagnosisContext] = None,
 ) -> Optional[str]:
-    """运行 AI 深度诊断。"""
+    """鏉╂劘顢?AI 濞ｅ崬瀹崇拠濠冩焽閵?"""
+    all_issues: list[DiagnosticIssue] = []
     try:
-        all_issues = level1_issues + level2_issues
+        all_issues = _pick_ai_issues(level1_issues, level2_issues)
 
-        # 只保留当前 prompt 会实际使用的诊断证据，避免额外解析 .frd/.inp。
+        # 閸欘亙绻氶悾娆忕秼閸?prompt 娴兼艾鐤勯梽鍛▏閻劎娈戠拠濠冩焽鐠囦焦宓侀敍宀勪缉閸忓秹顤傛径鏍掗弸?.frd/.inp閵?
         stderr_snippets = _get_stderr_snippets(results_dir, all_issues, ctx=ctx)
 
         issue_dicts = [
@@ -2288,25 +3160,54 @@ def _run_ai_diagnosis(
         ]
 
         physical_data = _get_physical_data(results_dir, inp_file, ctx=ctx)
+        convergence_metrics = _get_convergence_metrics(results_dir, ctx=ctx)
+        convergence_summary = _summarize_convergence_metrics(
+            convergence_metrics,
+            issues=all_issues,
+        )
         stderr_summary = _get_stderr_summary(results_dir, ctx=ctx)
+        evidence_sources = [
+            bool(stderr_snippets.strip()),
+            bool(physical_data.strip()),
+            bool(stderr_summary.strip()) and stderr_summary.strip().lower() != "no convergence data",
+            bool(similar_cases),
+            bool(convergence_summary.get("file_count")),
+        ]
+        if sum(1 for flag in evidence_sources if flag) < 2:
+            # Insufficient grounded evidence: use deterministic diagnosis to avoid hallucination.
+            return _build_rule_based_diagnosis(all_issues)
+
+        evidence_digest = _build_ai_evidence_digest(
+            all_issues,
+            similar_cases,
+            stderr_snippets=stderr_snippets,
+            physical_data=physical_data,
+            stderr_summary=stderr_summary,
+            convergence_summary=convergence_summary,
+        )
         prompt_text = make_diagnose_prompt_v2(
             issue_dicts,
             stderr_snippets,
             physical_data=physical_data,
             stderr_summary=stderr_summary,
             similar_cases=similar_cases,
+            evidence_digest=evidence_digest,
         )
 
         if stream:
             handler = StreamHandler()
             tokens = client.complete_streaming(prompt_text)
-            return validate_ai_output(handler.stream_tokens(tokens))
+            ai_text = validate_ai_output(handler.stream_tokens(tokens))
         else:
-            return validate_ai_output(client.complete(prompt_text))
+            ai_text = validate_ai_output(client.complete(prompt_text))
+
+        if ai_text and ai_text.strip():
+            return ai_text
+        return _build_rule_based_diagnosis(all_issues)
 
     except Exception as e:
-        log.warning("AI 诊断失败: %s", e)
-        return None
+        log.warning("AI 鐠囧﹥鏌囨径杈Е: %s", e)
+        return _build_rule_based_diagnosis(all_issues)
 
 
 def strip_code_blocks(text: str) -> str:
@@ -2341,17 +3242,17 @@ def _get_physical_data(
     inp_file: Optional[Path] = None,
     ctx: Optional[DiagnosisContext] = None,
 ) -> str:
-    """从 .frd 文件提取关键物理数据用于 AI 分析。"""
+    """娴?.frd 閺傚洣娆㈤幓鎰絿閸忔娊鏁悧鈺冩倞閺佺増宓侀悽銊ょ艾 AI 閸掑棙鐎介妴?"""
     try:
         frd_data = _get_frd_data(results_dir, ctx=ctx)
         if frd_data is None:
             return ""
         lines = []
 
-        # 节点/单元数
-        lines.append(f"节点数: {frd_data.node_count}, 单元数: {frd_data.element_count}")
+        # 閼哄倻鍋?閸楁洖鍘撻弫?
+        lines.append(f"閼哄倻鍋ｉ弫? {frd_data.node_count}, 閸楁洖鍘撻弫? {frd_data.element_count}")
 
-        # 材料弹性模量 E（从 INP 文件提取）
+        # 閺夋劖鏋″瑙勨偓褎膩闁?E閿涘牅绮?INP 閺傚洣娆㈤幓鎰絿閿?
         inp_lines = _get_inp_lines(inp_file, ctx=ctx)
         for i, line in enumerate(inp_lines):
             if line.upper().startswith("*ELASTIC"):
@@ -2359,10 +3260,10 @@ def _get_physical_data(
                 parts = re.findall(r'[+-]?\d+\.?\d*(?:[eE][-+]?\d+)?', next_line)
                 if parts:
                     E_val = float(parts[0])
-                    lines.append(f"材料弹性模量 E: {E_val:.6e} MPa")
+                    lines.append(f"閺夋劖鏋″瑙勨偓褎膩闁?E: {E_val:.6e} MPa")
                     break
 
-        # 位移
+        # 娴ｅ秶些
         disp_result = frd_data.get_result("DISP")
         if disp_result and disp_result.values:
             max_disp = 0.0
@@ -2373,9 +3274,9 @@ def _get_physical_data(
                     if magnitude > max_disp:
                         max_disp = magnitude
                         max_node = node_id
-            lines.append(f"最大位移: {max_disp:.6e} (节点 {max_node})")
+            lines.append(f"閺堚偓婢堆傜秴缁? {max_disp:.6e} (閼哄倻鍋?{max_node})")
 
-        # 应力
+        # 鎼存柨濮?
         stress_result = frd_data.get_result("STRESS")
         if stress_result and stress_result.values:
             max_stress = 0.0
@@ -2386,15 +3287,15 @@ def _get_physical_data(
                     if vm > max_stress:
                         max_stress = vm
                         max_elem = elem_id
-            lines.append(f"最大 von Mises 应力: {max_stress:.6e} (单元 {max_elem})")
+            lines.append(f"閺堚偓婢?von Mises 鎼存柨濮? {max_stress:.6e} (閸楁洖鍘?{max_elem})")
 
-        # 应变分量（TOSTRAIN 包含 EXX, EYY, EZZ, EXY, EYZ, EZX）
+        # 鎼存柨褰夐崚鍡涘櫤閿涘湵OSTRAIN 閸栧懎鎯?EXX, EYY, EZZ, EXY, EYZ, EZX閿?
         strain_result = frd_data.get_result("TOSTRAIN")
         if strain_result and strain_result.components and strain_result.values:
             strain_components = strain_result.components
             strain_vals_by_node = strain_result.values
 
-            # 找出每个分量的最大值
+            # 閹垫儳鍤В蹇庨嚋閸掑棝鍣洪惃鍕付婢堆冣偓?
             max_vals = {}
             max_nodes = {}
             for comp_idx, comp_name in enumerate(strain_components):
@@ -2411,113 +3312,199 @@ def _get_physical_data(
                     max_nodes[comp_name] = max_node
 
             if max_vals:
-                lines.append(f"\n应变分量（绝对值最大）:")
+                lines.append(f"\n鎼存柨褰夐崚鍡涘櫤閿涘牏绮风€电懓鈧吋娓舵径褝绱?")
                 for comp_name in strain_components:
                     if comp_name in max_vals:
-                        lines.append(f"  {comp_name}: {max_vals[comp_name]:.6e} (节点 {max_nodes[comp_name]})")
+                        lines.append(f"  {comp_name}: {max_vals[comp_name]:.6e} (閼哄倻鍋?{max_nodes[comp_name]})")
 
-                # 检测是否存在大变形特征（应变 > 0.1）
+                # 濡偓濞村妲搁崥锕€鐡ㄩ崷銊ャ亣閸欐ê鑸伴悧鐟扮窙閿涘牆绨查崣?> 0.1閿?
                 large_strain_components = {k: v for k, v in max_vals.items() if v > 0.1}
                 if large_strain_components:
-                    lines.append(f"\n⚠️ 大变形警告：检测到以下应变分量 > 0.1（10%变形）:")
+                    lines.append(f"\n閳跨媴绗?婢堆冨綁瑜般垼顒熼崨濠忕窗濡偓濞村鍩屾禒銉ょ瑓鎼存柨褰夐崚鍡涘櫤 > 0.1閿?0%閸欐ê鑸伴敍?")
                     for comp_name, val in large_strain_components.items():
                         lines.append(f"  {comp_name}: {val:.4f}")
 
         return "\n".join(lines)
     except Exception as e:
-        log.warning("提取物理数据失败: %s", e)
+        log.warning("閹绘劕褰囬悧鈺冩倞閺佺増宓佹径杈Е: %s", e)
         return ""
+
+
+def _classify_series_trend(
+    values: list[float],
+    *,
+    neutral_ratio: float = 0.15,
+    direction_words: tuple[str, str, str] = ("decreasing", "increasing", "steady"),
+) -> str:
+    if len(values) < 2:
+        return "insufficient"
+
+    first = values[0]
+    last = values[-1]
+
+    if first == 0:
+        if last == 0:
+            return direction_words[2]
+        return direction_words[1] if last > 0 else direction_words[0]
+
+    ratio = (last - first) / abs(first)
+    if ratio <= -neutral_ratio:
+        return direction_words[0]
+    if ratio >= neutral_ratio:
+        return direction_words[1]
+    return direction_words[2]
+
+
+def _format_series_bounds(values: list[float]) -> str:
+    if not values:
+        return "n/a"
+    return f"{values[0]:.3e}->{values[-1]:.3e}"
+
+
+def _extract_convergence_metrics(
+    results_dir: Path,
+    *,
+    ctx: Optional[DiagnosisContext] = None,
+) -> list[dict]:
+    metrics: list[dict] = []
+    float_pattern = r"(-?[\d.]+(?:[eE][+-]?\d+)?)"
+
+    for sta_file, text in _iter_result_texts(results_dir, ("*.sta",), ctx=ctx):
+        try:
+            lines = text.strip().splitlines()
+
+            max_iterations = 0
+            final_residual: Optional[float] = None
+            final_force_ratio: Optional[float] = None
+            final_increment: Optional[float] = None
+            converged: Optional[str] = None
+            residual_series: list[float] = []
+            increment_series: list[float] = []
+
+            for line in lines[-200:]:
+                upper = line.upper()
+                if converged is None:
+                    if "NOT CONVERGED" in upper or "DID NOT CONVERGE" in upper or "FAILED" in upper:
+                        converged = "NOT CONVERGED"
+                    elif "CONVERGED" in upper:
+                        converged = "CONVERGED"
+
+                iter_match = re.search(r"iter[=\s]+(\d+)", line, re.IGNORECASE)
+                if iter_match:
+                    max_iterations = max(max_iterations, int(iter_match.group(1)))
+
+                resid_match = re.search(rf"resid[.=\s]+{float_pattern}", line, re.IGNORECASE)
+                if resid_match:
+                    final_residual = float(resid_match.group(1))
+                    residual_series.append(final_residual)
+
+                force_match = re.search(rf"force%?\s*=\s*{float_pattern}", line, re.IGNORECASE)
+                if force_match:
+                    final_force_ratio = float(force_match.group(1))
+
+                inc_match = re.search(rf"increment\s+size\s*=\s*{float_pattern}", line, re.IGNORECASE)
+                if inc_match:
+                    final_increment = float(inc_match.group(1))
+                    increment_series.append(final_increment)
+
+            if (
+                converged is not None
+                or max_iterations > 0
+                or final_residual is not None
+                or final_increment is not None
+            ):
+                residual_trend = _classify_series_trend(residual_series)
+                increment_trend = _classify_series_trend(
+                    increment_series,
+                    direction_words=("shrinking", "growing", "steady"),
+                )
+                metrics.append(
+                    {
+                        "file": sta_file.name,
+                        "status": converged,
+                        "max_iter": max_iterations if max_iterations > 0 else None,
+                        "final_residual": final_residual,
+                        "final_force_ratio": final_force_ratio,
+                        "final_increment": final_increment,
+                        "residual_trend": (
+                            residual_trend if residual_trend != "insufficient" else None
+                        ),
+                        "residual_span": (
+                            _format_series_bounds(residual_series) if residual_series else None
+                        ),
+                        "increment_trend": (
+                            increment_trend if increment_trend != "insufficient" else None
+                        ),
+                        "increment_span": (
+                            _format_series_bounds(increment_series) if increment_series else None
+                        ),
+                    }
+                )
+        except OSError:
+            continue
+        except ValueError:
+            continue
+
+    return metrics
+
+
+def _get_convergence_metrics(
+    results_dir: Path,
+    *,
+    ctx: Optional[DiagnosisContext] = None,
+) -> list[dict]:
+    if ctx is None:
+        return _extract_convergence_metrics(results_dir, ctx=None)
+    if not ctx.convergence_metrics_loaded:
+        ctx.convergence_metrics = _extract_convergence_metrics(results_dir, ctx=ctx)
+        ctx.convergence_metrics_loaded = True
+    return ctx.convergence_metrics
 
 
 def _get_stderr_summary(
     results_dir: Path,
     ctx: Optional[DiagnosisContext] = None,
 ) -> str:
-    """
-    从 .sta 文件提取结构化收敛指标，不发送原始数据给 AI。
+    """Extract compact convergence metrics and trends from .sta files."""
+    items = _get_convergence_metrics(results_dir, ctx=ctx)
+    if not items:
+        return "no convergence data"
 
-    返回格式：
-    - 最大迭代次数
-    - 最终残差
-    - 收敛状态
-    - 时间/增量信息
-    """
     summaries: list[str] = []
+    for item in items:
+        parts = [f"file={item['file']}"]
+        if item.get("status"):
+            parts.append(f"status={item['status']}")
+        if item.get("max_iter") is not None:
+            parts.append(f"max_iter={item['max_iter']}")
+        if item.get("final_residual") is not None:
+            parts.append(f"final_residual={item['final_residual']:.3e}")
+        if item.get("final_force_ratio") is not None:
+            parts.append(f"final_force_ratio={item['final_force_ratio']:.2f}%")
+        if item.get("final_increment") is not None and item["final_increment"] > 0:
+            parts.append(f"final_increment={item['final_increment']:.3e}")
+        if item.get("residual_trend"):
+            span = item.get("residual_span") or "n/a"
+            parts.append(f"residual_trend={item['residual_trend']}({span})")
+        if item.get("increment_trend"):
+            span = item.get("increment_span") or "n/a"
+            parts.append(f"increment_trend={item['increment_trend']}({span})")
+        summaries.append(" | ".join(parts))
 
-    for sta_file, text in _iter_result_texts(results_dir, ("*.sta",), ctx=ctx):
-        try:
-            lines = text.strip().splitlines()
-
-            # 提取关键收敛指标
-            max_iterations = 0
-            final_residual = None
-            final_force_ratio = None
-            final_increment = None
-            converged = None
-
-            for line in lines[-100:]:  # 只看最后100行
-                # 检测收敛状态
-                if "SUMMARY OF CONVERGENCY INFORMATION" in line or "CONVERGENCE" in line.upper():
-                    converged = "NOT CONVERGED" if "NOT" in line.upper() or "FAILED" in line.upper() else "CONVERGED"
-                # 检测最大迭代次数（step=XXX, inc=XXX, att=XXX, iter=XXX）
-                iter_match = re.search(r'iter[=\s]+(\d+)', line, re.IGNORECASE)
-                if iter_match:
-                    max_iterations = max(max_iterations, int(iter_match.group(1)))
-                # 检测残差（resid.=XXX）
-                resid_match = re.search(r'resid[.=\s]+(-?[\d.]+)', line, re.IGNORECASE)
-                if resid_match:
-                    final_residual = float(resid_match.group(1))
-                # 检测力比（force%=XXX）
-                force_match = re.search(r'force%?\s*=\s*([\d.]+)', line, re.IGNORECASE)
-                if force_match:
-                    final_force_ratio = float(force_match.group(1))
-                # 检测增量（increment size = XXX）
-                inc_match = re.search(r'increment\s+size\s*=\s*([\d.eE+-]+)', line, re.IGNORECASE)
-                if inc_match:
-                    try:
-                        final_increment = float(inc_match.group(1))
-                    except ValueError:
-                        pass
-
-            # 构建结构化摘要（不发原始行）
-            if max_iterations > 0 or final_residual is not None:
-                parts = [f"文件名: {sta_file.name}"]
-                if converged:
-                    parts.append(f"收敛状态: {converged}")
-                if max_iterations > 0:
-                    parts.append(f"最大迭代次数: {max_iterations}")
-                if final_residual is not None:
-                    parts.append(f"最终残差: {final_residual:.4f}")
-                if final_force_ratio is not None:
-                    parts.append(f"最终力比: {final_force_ratio:.2f}%")
-                if final_increment is not None and final_increment > 0:
-                    parts.append(f"最终增量步: {final_increment:.2e}")
-
-                summaries.append(" | ".join(parts))
-
-        except OSError:
-            pass
-
-    return "\n".join(summaries) if summaries else "（无收敛数据）"
-
+    return "\n".join(summaries)
 
 def _get_stderr_snippets(
     results_dir: Path,
     issues: list,
     ctx: Optional[DiagnosisContext] = None,
 ) -> str:
-    """
-    提取与规则检测问题直接相关的 stderr 片段。
-
-    这是规则的直接证据，不是原始数据。
-    """
+    """Extract stderr snippets relevant to current diagnosis issues."""
     if not issues:
         return ""
 
     snippets: list[str] = []
     stderr_file = None
 
-    # 收集所有 stderr 文件
     stderr_files = _glob_cached(results_dir, "*.stderr", ctx=ctx)
     if stderr_files:
         stderr_file = stderr_files[0]
@@ -2528,47 +3515,52 @@ def _get_stderr_snippets(
     try:
         text = _read_text_cached(stderr_file, ctx=ctx)
         lines = text.splitlines()
+        lowered_lines = [line.lower() for line in lines]
+        used_ranges: set[tuple[int, int]] = set()
 
-        # 为每个 issue 找到对应的 stderr 片段
-        for issue in issues:
-            message = issue.message.lower() if issue.message else ""
+        for issue in normalize_issues(issues):
+            keywords = _issue_keywords(issue)
+            if not keywords:
+                continue
 
-            # 关键词匹配
-            keywords = []
-            if "elastic" in message:
-                keywords.extend(["elastic", "elastic constants"])
-            if "density" in message:
-                keywords.append("density")
-            if "converge" in message or "收敛" in message:
-                keywords.extend(["converge", "not converged", "divergence"])
-            if "jacobian" in message:
-                keywords.append("jacobian")
-            if "hourglass" in message:
-                keywords.append("hourglassing")
+            for i, line_lower in enumerate(lowered_lines):
+                if not any(kw in line_lower for kw in keywords):
+                    continue
 
-            # 找到匹配的行的上下文（前后各2行）
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
-                for kw in keywords:
-                    if kw in line_lower:
-                        # 提取片段（前后各2行）
-                        start = max(0, i - 2)
-                        end = min(len(lines), i + 3)
-                        snippet_lines = lines[start:end]
+                start = max(0, i - AI_SNIPPET_CONTEXT_RADIUS)
+                end = min(len(lines), i + AI_SNIPPET_CONTEXT_RADIUS + 1)
+                range_key = (start, end)
+                if range_key in used_ranges:
+                    continue
+                used_ranges.add(range_key)
 
-                        # 标记匹配行
-                        for j in range(len(snippet_lines)):
-                            if i - start == j:
-                                snippet_lines[j] = f">>> {snippet_lines[j]}"
-                            else:
-                                snippet_lines[j] = f"    {snippet_lines[j]}"
+                snippet_lines = lines[start:end]
+                for j in range(len(snippet_lines)):
+                    if i - start == j:
+                        snippet_lines[j] = f">>> {snippet_lines[j]}"
+                    else:
+                        snippet_lines[j] = f"    {snippet_lines[j]}"
 
-                        snippets.append(f"--- 匹配片段 ({stderr_file.name} 行 {i+1}) ---")
-                        snippets.extend(snippet_lines)
-                        snippets.append("")
-                        break  # 只取第一个匹配
+                snippets.append(f"--- Match ({stderr_file.name} line {i + 1}) [{issue.category}] ---")
+                snippets.extend(snippet_lines)
+                snippets.append("")
+
+                if len(used_ranges) >= AI_MAX_SNIPPETS:
+                    break
+                break
+
+            if len(used_ranges) >= AI_MAX_SNIPPETS:
+                break
+
+        if not snippets:
+            fallback_lines = lines[: min(len(lines), 20)]
+            if fallback_lines:
+                snippets.append(f"--- Fallback ({stderr_file.name}) ---")
+                snippets.extend(f"    {line}" for line in fallback_lines)
 
     except OSError:
         pass
 
-    return "\n".join(snippets) if snippets else "（无相关片段）"
+    return "\n".join(snippets) if snippets else "No relevant snippets found."
+
+

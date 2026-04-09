@@ -1,0 +1,37 @@
+{
+  "convergence": {
+    "min_support": 2,
+    "min_score": 0.72,
+    "score_penalty": 0.15
+  },
+  "boundary_condition": {
+    "min_support": 2,
+    "min_score": 0.7,
+    "score_penalty": 0.12
+  },
+  "contact": {
+    "min_support": 2,
+    "min_score": 0.72,
+    "score_penalty": 0.12
+  },
+  "dynamics": {
+    "min_support": 2,
+    "min_score": 0.7,
+    "score_penalty": 0.12
+  },
+  "load_transfer": {
+    "min_support": 2,
+    "min_score": 0.68,
+    "score_penalty": 0.1
+  },
+  "input_syntax": {
+    "min_support": 1,
+    "min_score": 0.45,
+    "score_penalty": 0.06
+  },
+  "material": {
+    "min_support": 1,
+    "min_score": 0.45,
+    "score_penalty": 0.06
+  }
+}

@@ -19,6 +19,7 @@ CLI 框架：Typer + Rich
 """
 from __future__ import annotations
 
+import json
 import os
 # 确保子进程使用 UTF-8 编码（避免 Windows GBK 编码问题）
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -1088,9 +1089,12 @@ def _print_solve_result(result, inp_file: Path) -> None:
     from cae.solvers.base import SolveResult
 
     if result.success:
+        has_warnings = bool(result.warnings)
+        status_title = "[bold yellow]求解完成（含警告）[/bold yellow]" if has_warnings else "[bold green]求解完成！[/bold green]"
+        status_border = "yellow" if has_warnings else "green"
         console.print(Panel(
-            f"[bold green]求解完成！[/bold green]  耗时 {result.duration_str}",
-            border_style="green",
+            f"{status_title}  耗时 {result.duration_str}",
+            border_style=status_border,
             expand=False,
         ))
         console.print()
@@ -1113,7 +1117,7 @@ def _print_solve_result(result, inp_file: Path) -> None:
             )
         if result.warnings:
             console.print(
-                f"\n  [yellow]警告: {len(result.warnings)} 条[/yellow]"
+                f"\n  [yellow]结果已生成，但检测到 {len(result.warnings)} 条警告[/yellow]"
                 " — 运行 [bold]`cae diagnose`[/bold] 查看详情"
             )
         console.print(
@@ -1710,6 +1714,21 @@ def diagnose(
     results_dir: Optional[Path] = typer.Argument(None, help="结果目录"),
     inp_file: Optional[Path] = typer.Option(None, "-i", "--inp", help="INP 文件（用于规则检测和参考案例匹配）"),
     ai: bool = typer.Option(False, "--ai", help="启用 AI 深度诊断（需要 Ollama）"),
+    guardrails: Optional[Path] = typer.Option(
+        None,
+        "--guardrails",
+        help="???????? JSON ????????????",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="以结构化 JSON 输出到标准输出",
+    ),
+    json_out: Optional[Path] = typer.Option(
+        None,
+        "--json-out",
+        help="导出结构化诊断 JSON 到指定路径",
+    ),
 ) -> None:
     """
     [bold]诊断仿真问题[/bold]
@@ -1721,11 +1740,12 @@ def diagnose(
 
     使用 [bold]--ai[/bold] 启用 AI 深度诊断。
     """
-    from cae.ai.diagnose import build_diagnosis_summary, diagnose_results
+    from cae.ai.diagnose import build_diagnosis_summary, diagnosis_result_to_dict, diagnose_results
 
-    console.print()
-    console.print(Panel.fit("[bold cyan]cae diagnose[/bold cyan] — 诊断仿真问题", border_style="cyan"))
-    console.print()
+    if not json_output:
+        console.print()
+        console.print(Panel.fit("[bold cyan]cae diagnose[/bold cyan] — 诊断仿真问题", border_style="cyan"))
+        console.print()
 
     if results_dir is None:
         raw = typer.prompt("  请输入结果目录路径")
@@ -1735,14 +1755,16 @@ def diagnose(
     if results_dir.is_file():
         inp_file = results_dir
         results_dir = results_dir.parent
-        console.print(f"  检测到 INP 文件，自动使用其目录作为结果目录: [cyan]{results_dir}[/cyan]")
+        if not json_output:
+            console.print(f"  检测到 INP 文件，自动使用其目录作为结果目录: [cyan]{results_dir}[/cyan]")
     elif inp_file is None and not any(results_dir.glob("*.frd")):
         # 如果没有指定 INP 文件，且 results_dir 下没有 .frd 文件
         # 尝试在 results_dir 下找 INP 文件
         inp_files = list(results_dir.glob("*.inp"))
         if inp_files:
             inp_file = inp_files[0]
-            console.print(f"  自动检测到 INP 文件: [cyan]{inp_file}[/cyan]")
+            if not json_output:
+                console.print(f"  自动检测到 INP 文件: [cyan]{inp_file}[/cyan]")
 
     # ========== Level 1 + 2: 规则检测 + 参考案例 ==========
     client = None
@@ -1750,11 +1772,43 @@ def diagnose(
         from cae.ai.llm_client import LLMConfig, LLMClient
         config = LLMConfig(use_ollama=True, model_name="deepseek-r1:1.5b")
         client = LLMClient(config=config)
-        console.print("  [yellow]AI 深度诊断已启用[/yellow]\n")
+        if not json_output:
+            console.print("  [yellow]AI 深度诊断已启用[/yellow]\n")
     else:
-        console.print("  [dim]使用 --ai 启用 AI 深度诊断[/dim]\n")
+        if not json_output:
+            console.print("  [dim]使用 --ai 启用 AI 深度诊断[/dim]\n")
 
-    result = diagnose_results(results_dir, client, inp_file=inp_file, stream=False)
+    result = diagnose_results(
+        results_dir,
+        client,
+        inp_file=inp_file,
+        stream=False,
+        guardrails_path=guardrails,
+    )
+
+    payload = None
+    if json_out is not None or json_output:
+        payload = diagnosis_result_to_dict(
+            result,
+            results_dir=results_dir,
+            inp_file=inp_file,
+            ai_enabled=ai,
+        )
+
+    if json_out is not None and payload is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if not json_output:
+            console.print(f"  [green]结构化诊断已导出:[/green] [cyan]{json_out}[/cyan]")
+
+    if json_output and payload is not None:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        if not result.success:
+            raise typer.Exit(1)
+        return
 
     if not result.success:
         err_console.print(f"\n  诊断失败: {result.error}\n")
@@ -1766,9 +1820,17 @@ def diagnose(
         top_issue = summary["top_issue"]
         console.print(f"  [bold red]发现 {summary['total']} 个问题[/bold red]")
         console.print(f"  严重问题: [red]{summary['error_count']}[/red]  警告: [yellow]{summary['warning_count']}[/yellow]")
+        console.print(f"  风险评分: [bold]{summary.get('risk_score', 0)}/100[/bold]")
+        category_summary = ", ".join(
+            f"{k}:{v}" for k, v in sorted(summary.get("by_category", {}).items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+        )
+        if category_summary:
+            console.print(f"  主要问题分布: {category_summary}")
         if top_issue is not None:
             console.print(f"  最优先问题: [bold]{top_issue.title}[/bold]")
             console.print(f"  首步操作: {summary['first_action'] or '先按最高优先级问题检查输入与约束'}")
+        for idx, action in enumerate(summary.get("action_items", []), 1):
+            console.print(f"  建议动作 {idx}: {action}")
         for iss in result.issues[:15]:
             icon = "[red]X[/red]" if iss.severity == "error" else "[yellow]![/yellow]"
             priority_text = f"P{iss.priority}" if iss.priority is not None else "P?"

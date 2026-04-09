@@ -125,9 +125,35 @@ cae mesh check mesh.inp
 # Enable deep AI diagnosis
 cae diagnose results/ --ai
 
-# Use DeepSeek for diagnosis
-cae diagnose results/ --ai --provider deepseek
+# Export structured diagnosis JSON
+cae diagnose results/ --json
+
+# Export JSON to a file
+cae diagnose results/ --json-out out/diagnose.json
+
+# Override evidence guardrails config
+cae diagnose results/ --json --guardrails cae/ai/data/evidence_guardrails.json
 ```
+
+---
+
+## Diagnosis Output and Guardrails
+
+`cae diagnose --json` exports structured issues with grounded evidence fields:
+
+- `evidence_line`: `file:line: excerpt` evidence for the issue
+- `evidence_score`: confidence score in `[0,1]`
+- `evidence_support_count`: number of independent files supporting the issue
+- `evidence_conflict`: contradiction note when evidence trends conflict
+
+Guardrail thresholds are category-aware and configurable:
+
+- Default config path: `cae/ai/data/evidence_guardrails.json`
+- CLI override: `--guardrails <path>`
+- Environment override: `CAE_EVIDENCE_GUARDRAILS_PATH=<path>`
+
+When evidence is weak or contradictory for sensitive categories, severity can be
+automatically downgraded (for example `error -> warning`) to reduce false positives.
 
 ---
 
