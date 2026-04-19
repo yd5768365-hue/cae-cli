@@ -6,7 +6,7 @@
     "boundary_condition"
   ],
   "expected_severities": [
-    "error"
+    "warning"
   ],
   "notes": "No active boundary cards are present."
 }

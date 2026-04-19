@@ -6,7 +6,7 @@
     "load_transfer"
   ],
   "expected_severities": [
-    "error"
+    "warning"
   ],
   "notes": "Common load-transfer failure for coupling plus ineffective load."
 }

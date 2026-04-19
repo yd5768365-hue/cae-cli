@@ -12,6 +12,7 @@ from cae.ai.diagnose import (
     _get_evidence_guardrails,
     _get_stderr_snippets,
     _get_stderr_summary,
+    _parse_issue_location_hint,
     _pick_ai_issues,
     _run_ai_diagnosis,
     build_diagnosis_summary,
@@ -42,6 +43,13 @@ def test_build_diagnosis_summary_includes_distribution_fields() -> None:
     assert summary["by_category"]["input_syntax"] == 1
     assert summary["by_severity"]["error"] == 1
     assert summary["action_items"]
+
+
+def test_parse_issue_location_hint_handles_line_variants() -> None:
+    assert _parse_issue_location_hint("case.stderr:42") == ("case.stderr", 42)
+    assert _parse_issue_location_hint("input.inp line 12") == ("input.inp", 12)
+    assert _parse_issue_location_hint("input.inp 鐞?6") == ("input.inp", 6)
+    assert _parse_issue_location_hint("case.stderr") == ("case.stderr", None)
 
 
 def test_stderr_snippets_use_category_keywords() -> None:

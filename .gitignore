@@ -1,6 +1,8 @@
 # Python
 venv/
 .venv/
+.pytest_cache/
+.ruff_cache/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -51,3 +53,7 @@ models/
 
 # Build outputs
 release/
+
+# Test scratch directories
+tests/.tmp_*/
+tests/pytest-cache-files-*/

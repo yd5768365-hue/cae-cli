@@ -36,9 +36,9 @@ from typing import Optional
 from .llm_client import LLMClient
 from .prompts import make_diagnose_prompt_v2
 from .stream_handler import StreamHandler
-from .explain import _find_frd, _extract_stats
+from .explain import _find_frd
 from .diagnosis_history import DiagnosisHistoryStore, IssueObservation
-from .reference_cases import CaseMetadata, CaseDatabase, parse_inp_metadata, ClassificationTree
+from .reference_cases import CaseMetadata, CaseDatabase, parse_inp_metadata
 from cae.viewer.frd_parser import FrdData, parse_frd
 
 log = logging.getLogger(__name__)
@@ -725,19 +725,14 @@ def _parse_issue_location_hint(location: Optional[str]) -> tuple[Optional[str], 
     if colon_match:
         return colon_match.group(1), int(colon_match.group(2))
 
-    line_match = re.search(
-        r"([^\s]+)\s*(?:line|绗?\s*(\d+)(?:琛??",
-        location,
-        re.IGNORECASE,
-    )
-    if line_match:
-        return line_match.group(1), int(line_match.group(2))
-
     file_match = re.search(r"([^\s]+?\.[A-Za-z0-9_]+)", location)
     if file_match:
-        return file_match.group(1), None
+        tail = location[file_match.end() :]
+        line_match = re.search(r"(?:\bline\b|#|:)?[^\d]{0,12}(\d+)", tail, re.IGNORECASE)
+        return file_match.group(1), int(line_match.group(1)) if line_match else None
 
     return None, None
+
 
 def _build_issue_evidence_sources(
     results_dir: Path,
@@ -2850,7 +2845,7 @@ def _check_stress_gradient(
                 issues.append(DiagnosticIssue(
                     severity="warning",
                     category="stress_concentration",
-                    message=f"鎼存柨濮忓顖氬閺嬩礁銇囬敍鍫濇▕瀵?> 50x閿涘绱濋崣顖濆厴鐎涙ê婀惔鏂垮闂嗗棔鑵?",
+                    message="鎼存柨濮忓顖氬閺嬩礁銇囬敍鍫濇▕瀵?> 50x閿涘绱濋崣顖濆厴鐎涙ê婀惔鏂垮闂嗗棔鑵?",
                     suggestion="閸︺劌绨查崝娑㈡肠娑擃厼灏崺鐔峰鐎靛棛缍夐弽纭风礉閹存牔绱崠鏍у殤娴ｆ洖鑸伴悩?",
                 ))
 
@@ -3546,7 +3541,7 @@ def _get_physical_data(
                     max_nodes[comp_name] = max_node
 
             if max_vals:
-                lines.append(f"\n鎼存柨褰夐崚鍡涘櫤閿涘牏绮风€电懓鈧吋娓舵径褝绱?")
+                lines.append("\n鎼存柨褰夐崚鍡涘櫤閿涘牏绮风€电懓鈧吋娓舵径褝绱?")
                 for comp_name in strain_components:
                     if comp_name in max_vals:
                         lines.append(f"  {comp_name}: {max_vals[comp_name]:.6e} (閼哄倻鍋?{max_nodes[comp_name]})")
@@ -3554,7 +3549,7 @@ def _get_physical_data(
                 # 濡偓濞村妲搁崥锕€鐡ㄩ崷銊ャ亣閸欐ê鑸伴悧鐟扮窙閿涘牆绨查崣?> 0.1閿?
                 large_strain_components = {k: v for k, v in max_vals.items() if v > 0.1}
                 if large_strain_components:
-                    lines.append(f"\n閳跨媴绗?婢堆冨綁瑜般垼顒熼崨濠忕窗濡偓濞村鍩屾禒銉ょ瑓鎼存柨褰夐崚鍡涘櫤 > 0.1閿?0%閸欐ê鑸伴敍?")
+                    lines.append("\n閳跨媴绗?婢堆冨綁瑜般垼顒熼崨濠忕窗濡偓濞村鍩屾禒銉ょ瑓鎼存柨褰夐崚鍡涘櫤 > 0.1閿?0%閸欐ê鑸伴敍?")
                     for comp_name, val in large_strain_components.items():
                         lines.append(f"  {comp_name}: {val:.4f}")
 

@@ -6,8 +6,8 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/yd5768365-hue/cae-cli">GitHub</a> ·
-  <a href="https://pypi.org/project/cae-cxx/">PyPI</a> ·
+  <a href="https://github.com/yd5768365-hue/cae-cli">GitHub</a> |
+  <a href="https://pypi.org/project/cae-cxx/">PyPI</a> |
   <a href="https://github.com/yd5768365-hue/cae-cli/issues">Issues</a>
 </p>
 
@@ -40,6 +40,9 @@ pip install "cae-cxx[mesh]"
 
 # PDF reporting (weasyprint)
 pip install "cae-cxx[report]"
+
+# MCP server integration
+pip install "cae-cxx[mcp]"
 ```
 
 Install CalculiX:
@@ -88,6 +91,7 @@ Main commands:
 - `cae mesh`: meshing tools
 - `cae model`: manage local Ollama models
 - `cae config`: manage workspace configuration
+- `cae-mcp`: run the MCP server for OpenCode and other MCP clients
 
 `cae inp` subcommands:
 
@@ -140,6 +144,50 @@ cae diagnose results/ --json --history-db out/diagnosis_history.db
 
 ---
 
+## MCP Server (for OpenCode)
+
+`cae-cli` can run as an MCP server over `stdio` so OpenCode can call it reliably.
+
+Install MCP extra:
+
+```bash
+pip install "cae-cxx[mcp]"
+```
+
+Start server:
+
+```bash
+cae-mcp
+```
+
+Provided MCP tools:
+
+- `cae_health`
+- `cae_solvers`
+- `cae_solve`
+- `cae_diagnose`
+- `cae_inp_check`
+
+All tools return a stable envelope:
+
+- success: `{"ok": true, "data": ...}`
+- error: `{"ok": false, "error": {"code": "...", "message": "...", "details": {...}}}`
+
+Example OpenCode MCP config:
+
+```json
+{
+  "mcpServers": {
+    "cae-cli": {
+      "command": "python",
+      "args": ["-m", "cae.mcp_server"]
+    }
+  }
+}
+```
+
+---
+
 ## Diagnosis Output and Guardrails
 
 `cae diagnose --json` exports structured issues with grounded evidence fields:
@@ -175,17 +223,18 @@ automatically downgraded (for example `error -> warning`) to reduce false positi
 
 ```text
 cae-cli/
-├─ cae/                  # Main code
-│  ├─ main.py            # CLI entry point (Typer)
-│  ├─ inp/               # INP parsing, inspection, editing, and templates
-│  ├─ mesh/              # Mesh-related features
-│  ├─ solvers/           # Solver abstraction and registry
-│  ├─ viewer/            # FRD parsing, conversion, visualization, and reports
-│  ├─ ai/                # Diagnosis and AI features
-│  ├─ installer/         # Solver/model installation
-│  └─ config/            # Configuration management
-├─ tests/                # Tests
-└─ README.md
+|-- cae/                  # Main code
+|   |-- main.py            # CLI entry point (Typer)
+|   |-- mcp_server.py      # MCP stdio server
+|   |-- inp/               # INP parsing, inspection, editing, and templates
+|   |-- mesh/              # Mesh-related features
+|   |-- solvers/           # Solver abstraction and registry
+|   |-- viewer/            # FRD parsing, conversion, visualization, and reports
+|   |-- ai/                # Diagnosis and AI features
+|   |-- installer/         # Solver/model installation
+|   `-- config/            # Configuration management
+|-- tests/                # Tests
+`-- README.md
 ```
 
 ---
@@ -195,9 +244,9 @@ cae-cli/
 ```bash
 git clone https://github.com/yd5768365-hue/cae-cli
 cd cae-cli
-pip install -e ".[dev,ai,mesh,report]"
-pytest tests/ -v
-ruff check cae/
+pip install -e ".[dev,ai,mesh,report,mcp]"
+python -m pytest
+python -m ruff check cae/ tests/
 ```
 
 ---
