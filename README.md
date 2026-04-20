@@ -19,6 +19,7 @@
 - Local-first execution: core computation and result processing run on your own machine
 - AI-assisted diagnosis: rule-based checks + reference cases + optional deep AI analysis
 - INP toolchain: inspect, view, modify, generate templates, and suggest fixes
+- Standalone Docker workflow: check Docker/WSL Docker and run containerized CalculiX separately
 - Automation-friendly: CLI-first design for scripting and batch integration
 
 ---
@@ -86,6 +87,7 @@ Main commands:
 - `cae install`: install CalculiX
 - `cae ai-install`: install AI models
 - `cae diagnose`: diagnose simulation issues
+- `cae docker`: standalone Docker and containerized solver tools
 - `cae report`: generate a PDF report
 - `cae inp`: parse and modify INP files
 - `cae mesh`: meshing tools
@@ -104,6 +106,15 @@ Main commands:
 `cae model` subcommands:
 
 - `list` / `pull` / `show` / `delete` / `set`
+
+`cae docker` subcommands:
+
+- `catalog`: list built-in solver image aliases
+- `pull`: pull an image by alias or direct Docker image reference
+- `images`: list local Docker images visible to the selected Docker backend
+- `status`: check Docker availability, including Docker installed inside Windows WSL
+- `path`: convert a Windows path to the mount path used by WSL Docker
+- `calculix`: run CalculiX in a Docker container as a separate workflow
 
 ---
 
@@ -140,7 +151,106 @@ cae diagnose results/ --json --guardrails cae/ai/data/evidence_guardrails.json
 
 # Enable optional diagnosis history calibration (SQLite)
 cae diagnose results/ --json --history-db out/diagnosis_history.db
+
+# Check Docker or WSL Docker
+cae docker status
+
+# Show built-in solver image aliases
+cae docker catalog
+cae docker catalog --capability cfd
+cae docker recommend "steady CFD turbulence"
+
+# Pull the default CalculiX image and save it for future containerized runs
+cae docker pull calculix-parallelworks --set-default
+
+# List local Docker images
+cae docker images
+
+# Convert a Windows path for WSL Docker volume mounting
+cae docker path D:\CAE-CLI\case
+
+# Run CalculiX in a Docker container, separate from native `cae solve`
+cae docker calculix model.inp --image calculix:latest -o results/docker-model
+
+# Run another cataloged open-source solver with the generic container runner
+cae docker run su2 config.cfg --cmd "SU2_CFD config.cfg" -o results/su2-case
+
+# Build a local SU2 runtime image that actually exposes SU2_CFD
+cae docker build-su2-runtime --tag local/su2-runtime:8.3.0
+
+# Run the included Elmer smoke case
+cae docker run elmer examples/elmer_steady_heat/case.sif -o results/elmer-heat
 ```
+
+---
+
+## Docker Workflow
+
+Docker support is intentionally separate from the native solver command. Use
+`cae solve` for local/native CalculiX execution and `cae docker ...` for
+containerized workflows.
+
+On Windows, `cae docker status` probes native Docker first, then Docker installed
+inside WSL through `wsl -e docker`. When WSL Docker is selected, host paths are
+converted to `/mnt/<drive>/...` for volume mounts.
+
+Containerized CalculiX uses this command shape:
+
+```bash
+cae docker pull calculix-parallelworks --set-default
+cae docker calculix model.inp -o results/model-docker
+```
+
+Other open-source solvers are exposed through the shared Docker catalog and
+generic runner:
+
+```bash
+# CFD candidates: OpenFOAM and SU2
+cae docker recommend "external aerodynamic CFD"
+cae docker pull openfoam
+cae docker run openfoam path/to/openfoam-case --cmd "simpleFoam" -o results/openfoam-case
+
+# Structural and thermomechanical candidates: CalculiX and code_aster
+cae docker recommend "nonlinear structural contact"
+cae docker pull code-aster
+cae docker run code-aster case.export -o results/code-aster-case
+
+# Multiphysics candidate: Elmer
+cae docker recommend "thermal electromagnetic multiphysics"
+cae docker pull elmer
+cae docker run elmer case.sif -o results/elmer-case
+
+# Local SU2 runtime candidate
+cae docker build-su2-runtime --tag local/su2-runtime:8.3.0
+cae docker run su2-runtime config.cfg -o results/su2-case
+```
+
+The image can also be provided with `CAE_CALCULIX_DOCKER_IMAGE` or the
+`docker_calculix_image` config key.
+For other solver families, `cae docker pull <alias> --set-default` writes
+`docker_<solver>_image`, for example `docker_code_aster_image`.
+
+If Docker runs inside WSL and Docker Hub is slow, update WSL's
+`/etc/docker/daemon.json` registry mirror and restart Docker before pulling.
+The built-in catalog records per-image command paths because public solver
+images do not always expose `ccx` on `PATH`.
+`cae docker pull` reuses a local image by default; add `--refresh` when you
+want to contact the remote registry again.
+
+Built-in Docker solver aliases currently include:
+
+| Alias | Solver | Typical use |
+| --- | --- | --- |
+| `calculix-parallelworks` | CalculiX | Structural/thermal FEM with `.inp` input |
+| `code-aster` | code_aster | Nonlinear structure, contact, thermal mechanics |
+| `openfoam` | OpenFOAM | CFD case directories; override `--cmd` per solver app |
+| `openfoam-lite` | OpenFOAM | Smaller fallback image for quick OpenFOAM smoke tests |
+| `su2-runtime` | SU2 | Locally built runtime image exposing `SU2_CFD` |
+| `su2` | SU2 | Build container only; not a direct `SU2_CFD` runtime image |
+| `elmer` | Elmer | Multiphysics FEM with `.sif` input |
+
+The repository includes a minimal Elmer heat-conduction smoke case at
+`examples/elmer_steady_heat/case.sif`.
 
 ---
 
@@ -165,6 +275,14 @@ Provided MCP tools:
 - `cae_health`
 - `cae_solvers`
 - `cae_solve`
+- `cae_docker_status`
+- `cae_docker_catalog`
+- `cae_docker_recommend`
+- `cae_docker_images`
+- `cae_docker_pull`
+- `cae_docker_run`
+- `cae_docker_build_su2_runtime`
+- `cae_docker_calculix`
 - `cae_diagnose`
 - `cae_inp_check`
 
@@ -226,6 +344,8 @@ cae-cli/
 |-- cae/                  # Main code
 |   |-- main.py            # CLI entry point (Typer)
 |   |-- mcp_server.py      # MCP stdio server
+|   |-- docker/            # Standalone Docker/containerized solver features
+|   |-- runtimes/          # Runtime adapters such as native or WSL Docker
 |   |-- inp/               # INP parsing, inspection, editing, and templates
 |   |-- mesh/              # Mesh-related features
 |   |-- solvers/           # Solver abstraction and registry

@@ -38,6 +38,7 @@ from .prompts import make_diagnose_prompt_v2
 from .stream_handler import StreamHandler
 from .explain import _find_frd
 from .diagnosis_history import DiagnosisHistoryStore, IssueObservation
+from .fix_rules import get_safe_autofix_rule
 from .reference_cases import CaseMetadata, CaseDatabase, parse_inp_metadata
 from cae.viewer.frd_parser import FrdData, parse_frd
 
@@ -279,21 +280,7 @@ def _infer_priority(issue: DiagnosticIssue) -> int:
 
 
 def _infer_auto_fixable(issue: DiagnosticIssue) -> bool:
-    if issue.auto_fixable is not None:
-        return issue.auto_fixable
-
-    message_key = _normalize_text_key(issue.message)
-    suggestion_key = _normalize_text_key(issue.suggestion or "")
-
-    if issue.category == "material" and "elastic" in message_key:
-        return True
-    if issue.category == "input_syntax" and "step" in message_key:
-        return True
-    if issue.category == "convergence" and (
-        "increment" in message_key or "increment" in suggestion_key or "static" in suggestion_key
-    ):
-        return True
-    return False
+    return get_safe_autofix_rule(issue) is not None
 
 
 def _clamp_evidence_score(score: float) -> float:
@@ -493,6 +480,78 @@ def _should_replace_issue(current: DiagnosticIssue, candidate: DiagnosticIssue) 
     return candidate_has_location and not current_has_location
 
 
+def _issue_confidence_band(issue: DiagnosticIssue) -> str:
+    score = _infer_evidence_score(issue)
+    trust = _infer_evidence_source_trust(issue)
+    has_conflict = bool((issue.evidence_conflict or "").strip())
+
+    if has_conflict or score < 0.55 or trust < 0.45:
+        return "low"
+    if score >= 0.80 and trust >= 0.70:
+        return "high"
+    return "medium"
+
+
+def _issue_needs_review(issue: DiagnosticIssue) -> bool:
+    return _issue_confidence_band(issue) == "low" or bool((issue.evidence_conflict or "").strip())
+
+
+def _is_blocking_issue(issue: DiagnosticIssue) -> bool:
+    return issue.severity == "error" and not _issue_needs_review(issue)
+
+
+def _issue_triage_label(issue: DiagnosticIssue) -> str:
+    if _infer_auto_fixable(issue) and not _issue_needs_review(issue):
+        return "safe_auto_fix"
+    if _is_blocking_issue(issue):
+        return "blocking"
+    if _issue_needs_review(issue):
+        return "review"
+    return "monitor"
+
+
+def _calculate_risk_score(issues: list[DiagnosticIssue]) -> int:
+    score = 0.0
+    for issue in issues:
+        severity_weight = {
+            "error": 28.0,
+            "warning": 10.0,
+            "info": 3.0,
+        }.get(issue.severity, 4.0)
+        priority = issue.priority if issue.priority is not None else _infer_priority(issue)
+        priority_bonus = max(0, 6 - priority) * 2.0
+        confidence = _issue_confidence_band(issue)
+        confidence_weight = {
+            "high": 1.0,
+            "medium": 0.78,
+            "low": 0.45,
+        }[confidence]
+        score += (severity_weight + priority_bonus) * confidence_weight
+
+    error_count = sum(1 for issue in issues if issue.severity == "error")
+    if error_count >= 3:
+        score += 8.0
+
+    return min(100, int(round(score)))
+
+
+def _build_execution_plan(issues: list[DiagnosticIssue], limit: int = 5) -> list[dict]:
+    plan: list[dict] = []
+    for idx, issue in enumerate(issues[:limit], 1):
+        action = issue.action or f"Inspect {issue.category.replace('_', ' ')} evidence."
+        plan.append({
+            "step": idx,
+            "triage": _issue_triage_label(issue),
+            "category": issue.category,
+            "severity": issue.severity,
+            "confidence": _issue_confidence_band(issue),
+            "auto_fixable": _infer_auto_fixable(issue),
+            "action": action,
+            "evidence_line": issue.evidence_line,
+        })
+    return plan
+
+
 def normalize_issues(issues: list[DiagnosticIssue]) -> list[DiagnosticIssue]:
     deduped: dict[tuple[str, str], DiagnosticIssue] = {}
     for issue in issues:
@@ -540,19 +599,32 @@ def build_diagnosis_summary(issues: list[DiagnosticIssue]) -> dict:
     top_issue = normalized[0] if normalized else None
     by_category = dict(Counter(issue.category for issue in normalized))
     by_severity = dict(Counter(issue.severity for issue in normalized))
+    confidence_counts = dict(Counter(_issue_confidence_band(issue) for issue in normalized))
+    triage_counts = dict(Counter(_issue_triage_label(issue) for issue in normalized))
     action_items = [issue.action for issue in normalized if issue.action][:3]
-    risk_score = min(100, len(errors) * 30 + len(warnings) * 10 + len(normalized) * 2)
+    risk_score = _calculate_risk_score(normalized)
     return {
         "total": len(normalized),
         "error_count": len(errors),
         "warning_count": len(warnings),
         "auto_fixable_count": len(auto_fixable),
+        "blocking_count": sum(1 for issue in normalized if _is_blocking_issue(issue)),
+        "needs_review_count": sum(1 for issue in normalized if _issue_needs_review(issue)),
         "top_issue": top_issue,
         "first_action": top_issue.action if top_issue else "",
         "by_category": by_category,
         "by_severity": by_severity,
+        "confidence_counts": confidence_counts,
+        "triage_counts": triage_counts,
         "risk_score": risk_score,
+        "risk_level": (
+            "critical" if risk_score >= 80 else
+            "high" if risk_score >= 55 else
+            "medium" if risk_score >= 25 else
+            "low"
+        ),
         "action_items": action_items,
+        "execution_plan": _build_execution_plan(normalized),
     }
 
 
@@ -576,7 +648,9 @@ def issue_to_dict(issue: DiagnosticIssue) -> dict:
         "history_similar_conflict_rate": issue.history_similar_conflict_rate,
         "suggestion": issue.suggestion,
         "priority": issue.priority,
-        "auto_fixable": bool(issue.auto_fixable),
+        "auto_fixable": _infer_auto_fixable(issue),
+        "confidence": _issue_confidence_band(issue),
+        "triage": _issue_triage_label(issue),
     }
 
 

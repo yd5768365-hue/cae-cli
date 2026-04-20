@@ -82,6 +82,40 @@ def test_autofix_accepts_missing_elastic_issue() -> None:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def test_autofix_extracts_material_name_from_material_first_stderr() -> None:
+    workspace = _make_workspace()
+    try:
+        inp_file = workspace / "model.inp"
+        inp_file.write_text(
+            "*HEADING\n"
+            "*MATERIAL, NAME=STEEL\n"
+            "*DENSITY\n"
+            "7.85e-09\n",
+            encoding="utf-8",
+        )
+        (workspace / "case.stderr").write_text(
+            "ERROR: material STEEL has no elastic constants\n",
+            encoding="utf-8",
+        )
+
+        issue = DiagnosticIssue(
+            severity="error",
+            category="material",
+            message="material missing elastic constants",
+            suggestion="add *ELASTIC under *MATERIAL",
+        )
+
+        result = fix_inp(inp_file, [issue], workspace)
+
+        assert result.success is True
+        assert result.fixed_path is not None and result.fixed_path.exists()
+        fixed_text = result.fixed_path.read_text(encoding="utf-8")
+        assert "*ELASTIC" in fixed_text
+        assert "210000, 0.3" in fixed_text
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def test_get_safe_autofixable_issues_filters_to_explicit_whitelist() -> None:
     issues = [
         DiagnosticIssue(

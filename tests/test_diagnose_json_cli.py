@@ -139,6 +139,35 @@ def test_diagnose_text_output_includes_evidence_fields() -> None:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def test_diagnose_fix_flag_applies_safe_autofix_without_prompt() -> None:
+    workspace = _make_workspace()
+    try:
+        inp_file = workspace / "model.inp"
+        inp_file.write_text(
+            "*HEADING\n"
+            "*MATERIAL, NAME=STEEL\n"
+            "*DENSITY\n"
+            "7.85e-09\n",
+            encoding="utf-8",
+        )
+        (workspace / "case.stderr").write_text(
+            "ERROR: no elastic constants were assigned to material STEEL\n",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+
+        result = runner.invoke(app, ["diagnose", str(workspace), "-i", str(inp_file), "--fix"])
+
+        assert result.exit_code == 0
+        fixed_file = workspace / "model_fixed.inp"
+        backup_file = workspace / "model_original.inp"
+        assert fixed_file.exists()
+        assert backup_file.exists()
+        assert "*ELASTIC" in fixed_file.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def test_diagnose_json_history_db_accumulates_hits() -> None:
     workspace = _make_workspace()
     try:

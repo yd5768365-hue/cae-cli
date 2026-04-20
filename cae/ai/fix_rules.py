@@ -78,9 +78,14 @@ def _classify_issue_for_autofix(issue) -> Optional[str]:
     return None
 
 
+def get_safe_autofix_rule(issue) -> Optional[str]:
+    """Return the safe auto-fix rule name for an issue, if one is allowed."""
+    return _classify_issue_for_autofix(issue)
+
+
 def get_safe_autofixable_issues(issues: list) -> list:
     """Return only issues that match the explicit safe whitelist."""
-    return [issue for issue in issues if _classify_issue_for_autofix(issue) in SAFE_AUTOFIX_RULES]
+    return [issue for issue in issues if get_safe_autofix_rule(issue) in SAFE_AUTOFIX_RULES]
 
 
 def fix_inp(
@@ -107,6 +112,7 @@ def fix_inp(
 
     if output_dir is None:
         output_dir = inp_file.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     backup_path = output_dir / f"{inp_file.stem}_original{inp_file.suffix}"
     fixed_path = output_dir / f"{inp_file.stem}_fixed{inp_file.suffix}"
@@ -270,18 +276,25 @@ def _safe_extract_material_name(issue, results_dir: Optional[Path] = None) -> Op
                 text = stderr_file.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            match = re.search(r"to\s+material\s+(\w+)", text, re.IGNORECASE)
-            if match:
-                return match.group(1)
+            for pattern in (
+                r"\bto\s+material\s+([A-Za-z0-9_.-]+)",
+                r"\bfor\s+material\s+([A-Za-z0-9_.-]+)",
+                r"\bmaterial\s+([A-Za-z0-9_.-]+)\s+(?:has|is|was|with|:)",
+                r"\bmaterial\s+name\s*[=:]\s*([A-Za-z0-9_.-]+)",
+            ):
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
 
     suggestion = getattr(issue, "suggestion", "") or ""
     if suggestion:
-        match = re.search(r"(?:material|材料)\s*(\w+)", suggestion, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        match = re.search(r"NAME\s*=\s*(\w+)", suggestion, re.IGNORECASE)
-        if match:
-            return match.group(1)
+        for pattern in (
+            r"NAME\s*=\s*([A-Za-z0-9_.-]+)",
+            r"(?:material|材料)\s+([A-Za-z0-9_.-]+)",
+        ):
+            match = re.search(pattern, suggestion, re.IGNORECASE)
+            if match:
+                return match.group(1)
 
     return None
 

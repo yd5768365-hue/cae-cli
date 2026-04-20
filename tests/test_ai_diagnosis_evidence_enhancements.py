@@ -252,8 +252,8 @@ def test_diagnosis_result_to_dict_is_json_ready() -> None:
             DiagnosticIssue(
                 severity="error",
                 category="input_syntax",
-                message="Unknown keyword",
-                suggestion="Fix keyword",
+                message="INP file missing *STEP definition",
+                suggestion="add a *STEP block",
                 auto_fixable=True,
             )
         ],

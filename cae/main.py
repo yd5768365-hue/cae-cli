@@ -778,6 +778,469 @@ console = Console(legacy_windows=False, force_terminal=True)
 err_console = Console(stderr=True, style="bold red", legacy_windows=False)
 
 # ------------------------------------------------------------------ #
+# cae docker - standalone Docker features
+# ------------------------------------------------------------------ #
+
+docker_app = typer.Typer(
+    name="docker",
+    help="[bold]Docker container tools[/bold] - check Docker and run containerized solvers",
+    no_args_is_help=True,
+)
+
+
+@docker_app.command(name="status")
+def docker_status(
+    json_output: bool = typer.Option(False, "--json", help="Output Docker status as JSON."),
+) -> None:
+    """Check Docker availability, including Docker installed inside Windows WSL."""
+    from dataclasses import asdict
+
+    from cae.runtimes import DockerRuntime
+
+    info = DockerRuntime().inspect()
+    payload = asdict(info)
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        console.print()
+        console.print(Panel.fit("[bold cyan]cae docker status[/bold cyan]", border_style="cyan"))
+        console.print()
+        if info.available:
+            console.print("  [green][OK][/green] Docker is available")
+            console.print(f"  backend: [cyan]{info.backend}[/cyan]")
+            console.print(f"  version: [cyan]{info.version}[/cyan]")
+            console.print(f"  command: [cyan]{' '.join(info.command)}[/cyan]")
+            console.print(f"  WSL path mode: [cyan]{info.use_wsl_paths}[/cyan]")
+        else:
+            console.print("  [red][X][/red] Docker is not available")
+            console.print(f"  {info.error}")
+        console.print()
+
+    if not info.available:
+        raise typer.Exit(1)
+
+
+@docker_app.command(name="path")
+def docker_path(
+    path: Path = typer.Argument(..., help="Host path to convert for WSL Docker mounts."),
+) -> None:
+    """Convert a Windows path to the path form expected by Docker running inside WSL."""
+    from cae.runtimes import DockerRuntime
+
+    console.print(DockerRuntime.windows_path_to_wsl(path))
+
+
+@docker_app.command(name="catalog")
+def docker_catalog(
+    solver: Optional[str] = typer.Option(None, "--solver", help="Filter by solver family."),
+    capability: Optional[str] = typer.Option(None, "--capability", help="Filter by capability tag."),
+    include_experimental: bool = typer.Option(
+        True,
+        "--experimental/--no-experimental",
+        help="Include experimental image entries.",
+    ),
+    runnable_only: bool = typer.Option(
+        False,
+        "--runnable-only",
+        help="Only show images that expose a direct solver command.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output image catalog as JSON."),
+) -> None:
+    """List built-in Docker image aliases for solver containers."""
+    from cae.docker import list_image_spec_dicts
+
+    items = list_image_spec_dicts(
+        solver=solver,
+        capability=capability,
+        include_experimental=include_experimental,
+        runnable_only=runnable_only,
+    )
+    if json_output:
+        typer.echo(json.dumps({"images": items}, ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title="Docker image catalog", box=box.SIMPLE)
+    table.add_column("Alias", style="cyan")
+    table.add_column("Image", style="green")
+    table.add_column("Solver")
+    table.add_column("Maturity")
+    table.add_column("Runnable")
+    table.add_column("Capabilities")
+    table.add_column("Description")
+    for item in items:
+        table.add_row(
+            item["alias"],
+            item["image"],
+            item["solver"],
+            item["maturity"],
+            "yes" if item["runnable"] else "no",
+            ", ".join(item["capabilities"][:4]),
+            item["description"],
+        )
+    console.print()
+    console.print(table)
+    console.print()
+
+
+@docker_app.command(name="images")
+def docker_images(
+    json_output: bool = typer.Option(False, "--json", help="Output local images as JSON."),
+) -> None:
+    """List local Docker images visible to the configured Docker backend."""
+    from cae.runtimes import DockerRuntime
+
+    images = DockerRuntime().list_images()
+    if json_output:
+        typer.echo(json.dumps({"images": images}, ensure_ascii=False, indent=2))
+        return
+
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae docker images[/bold cyan]", border_style="cyan"))
+    if images:
+        for image in images:
+            console.print(f"  - [green]{image}[/green]")
+    else:
+        console.print("  [yellow]No local Docker images found or Docker is unavailable.[/yellow]")
+    console.print()
+
+
+@docker_app.command(name="pull")
+def docker_pull(
+    image_ref: str = typer.Argument(
+        "calculix",
+        help="Image alias from `cae docker catalog` or a direct Docker image reference.",
+    ),
+    timeout: int = typer.Option(3600, "--timeout", help="Docker pull timeout in seconds."),
+    set_default: bool = typer.Option(
+        False,
+        "--set-default",
+        help="Save the pulled image as the default image for its solver family.",
+    ),
+    use_docker_config: bool = typer.Option(
+        False,
+        "--use-docker-config",
+        help="Use the existing Docker config and credential helper instead of an isolated public-pull config.",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Contact the remote registry even if the image already exists locally.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output pull result as JSON."),
+) -> None:
+    """Pull a Docker image through the configured Docker backend."""
+    from cae.docker import get_image_spec, resolve_image_reference, solver_config_key
+    from cae.runtimes import DockerRuntime
+
+    image = resolve_image_reference(image_ref)
+    spec = get_image_spec(image_ref)
+    runtime = DockerRuntime()
+    already_present = runtime.image_exists(image)
+    skipped_pull = already_present and not refresh
+    result = None
+    if not skipped_pull:
+        result = runtime.pull_image(
+            image,
+            timeout=timeout,
+            use_default_config=use_docker_config,
+        )
+    image_present = skipped_pull or (result.returncode == 0 if result else False) or runtime.image_exists(image)
+    payload = {
+        "requested": image_ref,
+        "image": image,
+        "alias": spec.alias if spec else None,
+        "success": image_present,
+        "returncode": 0 if result is None else result.returncode,
+        "image_present": image_present,
+        "skipped_pull": skipped_pull,
+        "stdout": "" if result is None else result.stdout,
+        "stderr": "" if result is None else result.stderr,
+        "command": [] if result is None else result.command,
+    }
+    if image_present and set_default:
+        default_key = solver_config_key(spec.solver if spec else "solver")
+        settings.set(default_key, image)
+        payload["default_saved"] = True
+        payload["default_key"] = default_key
+    else:
+        payload["default_saved"] = False
+        payload["default_key"] = None
+
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        console.print()
+        console.print(Panel.fit("[bold cyan]cae docker pull[/bold cyan]", border_style="cyan"))
+        console.print(f"  image: [cyan]{image}[/cyan]")
+        if skipped_pull:
+            console.print("  [green][OK][/green] Image already exists locally")
+        if result and result.stdout.strip():
+            console.print(result.stdout.strip())
+        if result and result.stderr.strip():
+            console.print(result.stderr.strip())
+        if result and result.returncode == 0:
+            console.print("  [green][OK][/green] Image pulled successfully")
+            if set_default:
+                console.print(f"  [green][OK][/green] Saved default image: {image}")
+        elif not result and set_default:
+            console.print(f"  [green][OK][/green] Saved default image: {image}")
+        elif result and image_present:
+            console.print("  [yellow][!][/yellow] Pull failed, but the image already exists locally")
+            if set_default:
+                console.print(f"  [green][OK][/green] Saved default image: {image}")
+        else:
+            console.print(f"  [red][X][/red] Docker pull failed with code {result.returncode}")
+        console.print()
+
+    if not image_present:
+        raise typer.Exit(1)
+
+
+@docker_app.command(name="recommend")
+def docker_recommend(
+    query: str = typer.Argument(..., help="Problem description, e.g. 'steady CFD' or 'nonlinear structure'."),
+    limit: int = typer.Option(5, "--limit", help="Maximum number of candidates to return."),
+    json_output: bool = typer.Option(False, "--json", help="Output recommendations as JSON."),
+) -> None:
+    """Recommend open-source solver containers from the built-in catalog."""
+    from dataclasses import asdict
+
+    from cae.docker import recommend_image_specs
+
+    items = [asdict(spec) for spec in recommend_image_specs(query, limit=limit)]
+    if json_output:
+        typer.echo(json.dumps({"query": query, "recommendations": items}, ensure_ascii=False, indent=2))
+        return
+
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae docker recommend[/bold cyan]", border_style="cyan"))
+    console.print(f"  query: [cyan]{query}[/cyan]")
+    if not items:
+        console.print("  [yellow]No matching solver image found in the local catalog.[/yellow]")
+        console.print()
+        return
+
+    table = Table(title="Recommended solver containers", box=box.SIMPLE)
+    table.add_column("Alias", style="cyan")
+    table.add_column("Solver")
+    table.add_column("Maturity")
+    table.add_column("Capabilities")
+    table.add_column("Image", style="green")
+    for item in items:
+        table.add_row(
+            item["alias"],
+            item["solver"],
+            item["maturity"],
+            ", ".join(item["capabilities"][:5]),
+            item["image"],
+        )
+    console.print(table)
+    console.print()
+
+
+@docker_app.command(name="build-su2-runtime")
+def docker_build_su2_runtime(
+    tag: str = typer.Option(
+        "local/su2-runtime:8.3.0",
+        "--tag",
+        help="Local Docker image tag to create.",
+    ),
+    su2_version: str = typer.Option(
+        "8.3.0",
+        "--su2-version",
+        help="SU2 version to install from conda-forge.",
+    ),
+    base_image: str = typer.Option(
+        "mambaorg/micromamba:1.5.10",
+        "--base-image",
+        help="Micromamba base image used to build the runtime image.",
+    ),
+    timeout: int = typer.Option(3600, "--timeout", help="Docker build timeout in seconds."),
+    pull_base: bool = typer.Option(
+        True,
+        "--pull-base/--no-pull-base",
+        help="Ask Docker to refresh the base image during build.",
+    ),
+    set_default: bool = typer.Option(
+        True,
+        "--set-default/--no-set-default",
+        help="Save the built image as docker_su2_image.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output build result as JSON."),
+) -> None:
+    """Build a local SU2 runtime image that exposes SU2_CFD."""
+    from cae.runtimes import DockerRuntime
+
+    dockerfile = Path(__file__).resolve().parent / "docker" / "assets" / "su2-runtime-conda.Dockerfile"
+    result = DockerRuntime().build_image(
+        context_dir=dockerfile.parent,
+        dockerfile=dockerfile,
+        tag=tag,
+        build_args={
+            "SU2_VERSION": su2_version,
+            "MICROMAMBA_IMAGE": base_image,
+        },
+        timeout=timeout,
+        pull=pull_base,
+    )
+    success = result.returncode == 0
+    payload = {
+        "tag": tag,
+        "su2_version": su2_version,
+        "base_image": base_image,
+        "success": success,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": result.command,
+        "default_saved": False,
+    }
+    if success and set_default:
+        settings.set("docker_su2_image", tag)
+        payload["default_saved"] = True
+
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        console.print()
+        console.print(Panel.fit("[bold cyan]cae docker build-su2-runtime[/bold cyan]", border_style="cyan"))
+        console.print(f"  tag:     [cyan]{tag}[/cyan]")
+        console.print(f"  version: [cyan]{su2_version}[/cyan]")
+        if result.stdout.strip():
+            console.print(result.stdout.strip())
+        if result.stderr.strip():
+            console.print(result.stderr.strip())
+        if success:
+            console.print("  [green][OK][/green] SU2 runtime image built")
+            if set_default:
+                console.print(f"  [green][OK][/green] Saved docker_su2_image: {tag}")
+        else:
+            console.print(f"  [red][X][/red] SU2 runtime image build failed with code {result.returncode}")
+        console.print()
+
+    if not success:
+        raise typer.Exit(1)
+
+
+@docker_app.command(name="run")
+def docker_run_solver(
+    image_ref: str = typer.Argument(
+        ...,
+        help="Image alias from `cae docker catalog` or a direct Docker image reference.",
+    ),
+    input_path: Path = typer.Argument(..., help="Solver input file or case directory."),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory. Defaults to results/docker-<input_name>.",
+    ),
+    command: Optional[str] = typer.Option(
+        None,
+        "--cmd",
+        help="Override catalog command, e.g. --cmd 'SU2_CFD config.cfg'.",
+    ),
+    timeout: int = typer.Option(3600, "--timeout", help="Container run timeout in seconds."),
+    cpus: Optional[str] = typer.Option(None, "--cpus", help="Docker --cpus limit, e.g. 2."),
+    memory: Optional[str] = typer.Option(None, "--memory", help="Docker --memory limit, e.g. 4g."),
+    network: str = typer.Option("none", "--network", help="Docker network mode for the container."),
+) -> None:
+    """Run any cataloged solver container with a generic file or case-directory workflow."""
+    from cae.docker import DockerSolverRunner, resolve_image_reference
+
+    if not input_path.exists():
+        err_console.print(f"\n  input path not found: {input_path}\n")
+        raise typer.Exit(1)
+
+    output_dir = output or Path("results") / f"docker-{input_path.stem if input_path.is_file() else input_path.name}"
+    resolved_image = resolve_image_reference(image_ref)
+
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae docker run[/bold cyan]", border_style="cyan"))
+    console.print(f"  input:   [cyan]{input_path}[/cyan]")
+    console.print(f"  output:  [cyan]{output_dir}[/cyan]")
+    console.print(f"  image:   [cyan]{resolved_image}[/cyan]")
+    if command:
+        console.print(f"  command: [cyan]{command}[/cyan]")
+    console.print()
+
+    result = DockerSolverRunner().run(
+        image_ref,
+        input_path.resolve(),
+        output_dir.resolve(),
+        command=command,
+        timeout=timeout,
+        cpus=cpus,
+        memory=memory,
+        network=network,
+    )
+
+    if result.success:
+        console.print(f"  [green][OK][/green] Solver finished in {result.duration_seconds:.1f}s")
+    else:
+        console.print(f"  [red][X][/red] Solver failed with code {result.returncode}")
+        if result.error_message:
+            console.print(result.error_message)
+    console.print(f"  solver:  [cyan]{result.solver}[/cyan]")
+    console.print(f"  command: [cyan]{' '.join(result.command)}[/cyan]")
+    console.print(f"  output:  [cyan]{result.output_dir}[/cyan]")
+    console.print()
+
+    if not result.success:
+        raise typer.Exit(1)
+
+
+@docker_app.command(name="calculix")
+def docker_calculix(
+    inp_file: Path = typer.Argument(..., help=".inp input file to solve in a Docker container."),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory. Defaults to results/<job_name>.",
+    ),
+    image: Optional[str] = typer.Option(
+        None,
+        "--image",
+        help="CalculiX Docker image. Also supports CAE_CALCULIX_DOCKER_IMAGE.",
+    ),
+    timeout: int = typer.Option(3600, "--timeout", help="Container run timeout in seconds."),
+    cpus: Optional[str] = typer.Option(None, "--cpus", help="Docker --cpus limit, e.g. 2."),
+    memory: Optional[str] = typer.Option(None, "--memory", help="Docker --memory limit, e.g. 4g."),
+) -> None:
+    """Run CalculiX through the standalone Docker feature."""
+    from cae.docker import CalculixDockerRunner, resolve_image_reference
+
+    if not inp_file.exists():
+        err_console.print(f"\n  file not found: {inp_file}\n")
+        raise typer.Exit(1)
+
+    resolved_image = resolve_image_reference(image) if image else None
+    output_dir = output or Path("results") / inp_file.stem
+    console.print()
+    console.print(Panel.fit("[bold cyan]cae docker calculix[/bold cyan]", border_style="cyan"))
+    console.print(f"  input:  [cyan]{inp_file}[/cyan]")
+    console.print(f"  output: [cyan]{output_dir}[/cyan]")
+    if resolved_image:
+        console.print(f"  image:  [cyan]{resolved_image}[/cyan]")
+    console.print()
+
+    result = CalculixDockerRunner().run(
+        inp_file.resolve(),
+        output_dir.resolve(),
+        image=resolved_image,
+        timeout=timeout,
+        cpus=cpus,
+        memory=memory,
+    )
+    _print_solve_result(result, inp_file)
+    if not result.success:
+        raise typer.Exit(1)
+
+
+app.add_typer(docker_app, name="docker")
+
+# ------------------------------------------------------------------ #
 # cae config
 # ------------------------------------------------------------------ #
 
@@ -1732,6 +2195,21 @@ def diagnose(
         "--json-out",
         help="导出结构化诊断 JSON 到指定路径",
     ),
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Apply safe whitelist auto-fixes without prompting.",
+    ),
+    no_fix: bool = typer.Option(
+        False,
+        "--no-fix",
+        help="Skip safe auto-fixes without prompting.",
+    ),
+    fix_output_dir: Optional[Path] = typer.Option(
+        None,
+        "--fix-output-dir",
+        help="Directory for generated backup and fixed INP files.",
+    ),
 ) -> None:
     """
     [bold]诊断仿真问题[/bold]
@@ -1749,6 +2227,10 @@ def diagnose(
         diagnose_results,
         issue_to_dict,
     )
+
+    if fix and no_fix:
+        err_console.print("\n  [red]错误: --fix and --no-fix cannot be used together.[/red]\n")
+        raise typer.Exit(2)
 
     if not json_output:
         console.print()
@@ -1830,6 +2312,17 @@ def diagnose(
         console.print(f"  [bold red]发现 {summary['total']} 个问题[/bold red]")
         console.print(f"  严重问题: [red]{summary['error_count']}[/red]  警告: [yellow]{summary['warning_count']}[/yellow]")
         console.print(f"  风险评分: [bold]{summary.get('risk_score', 0)}/100[/bold]")
+        console.print(
+            "  诊断分层: "
+            f"blocking={summary.get('blocking_count', 0)}, "
+            f"review={summary.get('needs_review_count', 0)}, "
+            f"risk={summary.get('risk_level', 'low')}"
+        )
+        confidence_summary = ", ".join(
+            f"{k}:{v}" for k, v in sorted(summary.get("confidence_counts", {}).items())
+        )
+        if confidence_summary:
+            console.print(f"  证据置信度: {confidence_summary}")
         category_summary = ", ".join(
             f"{k}:{v}" for k, v in sorted(summary.get("by_category", {}).items(), key=lambda kv: (-kv[1], kv[0]))[:4]
         )
@@ -1895,14 +2388,24 @@ def diagnose(
 
         safe_fixable_issues = get_safe_autofixable_issues(result.issues)
         if safe_fixable_issues:
-            console.print(
-                f"  [bold yellow]是否执行安全自动修复？[/bold yellow] "
-                f"[dim](仅白名单问题，当前可修复 {len(safe_fixable_issues)} 项)[/dim] [bold yellow][y/N]:[/bold yellow] ",
-                end="",
-            )
-            user_input = input().strip().lower()
+            if fix:
+                user_input = "y"
+            elif no_fix:
+                user_input = "n"
+            else:
+                console.print(
+                    f"  [bold yellow]是否执行安全自动修复？[/bold yellow] "
+                    f"[dim](仅白名单问题，当前可修复 {len(safe_fixable_issues)} 项)[/dim] [bold yellow][y/N]:[/bold yellow] ",
+                    end="",
+                )
+                user_input = input().strip().lower()
             if user_input == "y":
-                fix_result = fix_inp(inp_file, result.issues, results_dir)
+                fix_result = fix_inp(
+                    inp_file,
+                    result.issues,
+                    results_dir,
+                    output_dir=fix_output_dir,
+                )
                 if fix_result.success:
                     console.print(f"  [green]✓ 原文件已保留: {fix_result.backup_path}[/green]")
                     console.print(f"  [green]✓ 修复文件已生成: {fix_result.fixed_path}[/green]")
