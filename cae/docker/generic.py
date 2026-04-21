@@ -183,9 +183,98 @@ def _copy_directory_contents(source: Path, dest: Path) -> None:
 
 
 def _copy_known_sidecar_dirs(input_path: Path, output_dir: Path) -> None:
-    if input_path.suffix.lower() != ".sif":
+    suffix = input_path.suffix.lower()
+    if suffix == ".sif":
+        _copy_elmer_mesh_sidecar(input_path, output_dir)
         return
+    if suffix == ".cfg":
+        _copy_su2_sidecar_files(input_path, output_dir)
+        return
+    if suffix == ".export":
+        _copy_code_aster_sidecar_files(input_path, output_dir)
 
+
+def _copy_elmer_mesh_sidecar(input_path: Path, output_dir: Path) -> None:
     mesh_dir = input_path.parent / "mesh"
     if mesh_dir.is_dir():
         _copy_directory_contents(mesh_dir, output_dir / "mesh")
+
+
+def _copy_su2_sidecar_files(input_path: Path, output_dir: Path) -> None:
+    for sidecar_name in _find_su2_sidecar_files(input_path):
+        sidecar_source = (input_path.parent / sidecar_name).resolve()
+        _copy_existing_sidecar_path(sidecar_source, output_dir / sidecar_name)
+
+
+def _find_su2_sidecar_files(input_path: Path) -> list[Path]:
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for raw_line in input_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("%", 1)[0].strip()
+        if "=" not in line:
+            continue
+        assignment_key, assignment_value = line.split("=", 1)
+        normalized_key = assignment_key.strip().upper()
+        if not normalized_key.endswith("_FILENAME"):
+            continue
+
+        candidate = Path(_strip_optional_quotes(assignment_value.strip()))
+        if not candidate or candidate.is_absolute() or ".." in candidate.parts:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        matches.append(candidate)
+    return matches
+
+
+def _copy_code_aster_sidecar_files(input_path: Path, output_dir: Path) -> None:
+    for sidecar_name in _find_code_aster_sidecar_paths(input_path):
+        sidecar_source = (input_path.parent / sidecar_name).resolve()
+        _copy_existing_sidecar_path(sidecar_source, output_dir / sidecar_name)
+
+
+def _find_code_aster_sidecar_paths(input_path: Path) -> list[Path]:
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for raw_line in input_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        try:
+            tokens = shlex.split(line, comments=False, posix=True)
+        except ValueError:
+            continue
+        if len(tokens) < 3 or tokens[0] not in {"F", "R"}:
+            continue
+
+        candidate = Path(tokens[2])
+        if not candidate or candidate.is_absolute() or ".." in candidate.parts:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        matches.append(candidate)
+    return matches
+
+
+def _copy_existing_sidecar_path(source: Path, dest: Path) -> None:
+    if source.is_dir():
+        if source == dest.resolve():
+            return
+        _copy_directory_contents(source, dest)
+        return
+    if not source.is_file():
+        return
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if source == dest.resolve():
+        return
+    shutil.copy2(source, dest)
+
+
+def _strip_optional_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value

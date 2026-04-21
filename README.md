@@ -172,11 +172,19 @@ cae docker path D:\CAE-CLI\case
 # Run CalculiX in a Docker container, separate from native `cae solve`
 cae docker calculix model.inp --image calculix:latest -o results/docker-model
 
-# Run another cataloged open-source solver with the generic container runner
-cae docker run su2 config.cfg --cmd "SU2_CFD config.cfg" -o results/su2-case
-
 # Build a local SU2 runtime image that actually exposes SU2_CFD
 cae docker build-su2-runtime --tag local/su2-runtime:8.3.0
+
+# Run the included official SU2 CFD smoke case
+cae docker run su2-runtime examples/su2_inviscid_bump/inv_channel_smoke.cfg -o results/su2-inviscid-bump-smoke
+
+# Run the included minimal Code_Aster smoke case
+cae docker pull code-aster
+cae docker run code-aster examples/code_aster_minimal_smoke/case.comm -o results/code-aster-smoke
+
+# Run the included OpenFOAM cavity smoke case
+cae docker pull openfoam-lite
+cae docker run openfoam-lite examples/openfoam_cavity_smoke --cmd "bash -lc 'blockMesh && icoFoam'" -o results/openfoam-cavity-smoke
 
 # Run the included Elmer smoke case
 cae docker run elmer examples/elmer_steady_heat/case.sif -o results/elmer-heat
@@ -207,22 +215,22 @@ generic runner:
 ```bash
 # CFD candidates: OpenFOAM and SU2
 cae docker recommend "external aerodynamic CFD"
-cae docker pull openfoam
-cae docker run openfoam path/to/openfoam-case --cmd "simpleFoam" -o results/openfoam-case
+cae docker pull openfoam-lite
+cae docker run openfoam-lite examples/openfoam_cavity_smoke --cmd "bash -lc 'blockMesh && icoFoam'" -o results/openfoam-cavity-smoke
 
 # Structural and thermomechanical candidates: CalculiX and code_aster
 cae docker recommend "nonlinear structural contact"
 cae docker pull code-aster
-cae docker run code-aster case.export -o results/code-aster-case
+cae docker run code-aster examples/code_aster_minimal_smoke/case.comm -o results/code-aster-smoke
 
 # Multiphysics candidate: Elmer
 cae docker recommend "thermal electromagnetic multiphysics"
 cae docker pull elmer
 cae docker run elmer case.sif -o results/elmer-case
 
-# Local SU2 runtime candidate
+# Local SU2 runtime candidate with an official CFD tutorial-derived smoke case
 cae docker build-su2-runtime --tag local/su2-runtime:8.3.0
-cae docker run su2-runtime config.cfg -o results/su2-case
+cae docker run su2-runtime examples/su2_inviscid_bump/inv_channel_smoke.cfg -o results/su2-inviscid-bump-smoke
 ```
 
 The image can also be provided with `CAE_CALCULIX_DOCKER_IMAGE` or the
@@ -233,7 +241,13 @@ For other solver families, `cae docker pull <alias> --set-default` writes
 If Docker runs inside WSL and Docker Hub is slow, update WSL's
 `/etc/docker/daemon.json` registry mirror and restart Docker before pulling.
 The built-in catalog records per-image command paths because public solver
-images do not always expose `ccx` on `PATH`.
+images do not always expose their solver launchers on `PATH`.
+For SU2 `.cfg` inputs, the generic runner also copies referenced sidecar files
+such as `MESH_FILENAME` and other existing `*_FILENAME` inputs into the mounted
+work directory before launching the container.
+For Code_Aster `.export` inputs, the generic runner also copies referenced local
+sidecar files such as `.comm` or `.med` inputs into the mounted work directory
+before launching the container.
 `cae docker pull` reuses a local image by default; add `--refresh` when you
 want to contact the remote registry again.
 
@@ -243,14 +257,19 @@ Built-in Docker solver aliases currently include:
 | --- | --- | --- |
 | `calculix-parallelworks` | CalculiX | Structural/thermal FEM with `.inp` input |
 | `code-aster` | code_aster | Nonlinear structure, contact, thermal mechanics |
+| `openfoam-foundation-11` | OpenFOAM | Smaller official OpenFOAM Foundation v11 fallback image |
 | `openfoam` | OpenFOAM | CFD case directories; override `--cmd` per solver app |
-| `openfoam-lite` | OpenFOAM | Smaller fallback image for quick OpenFOAM smoke tests |
+| `openfoam-lite` | OpenFOAM | Community fallback image validated with the cavity smoke case |
 | `su2-runtime` | SU2 | Locally built runtime image exposing `SU2_CFD` |
 | `su2` | SU2 | Build container only; not a direct `SU2_CFD` runtime image |
 | `elmer` | Elmer | Multiphysics FEM with `.sif` input |
 
-The repository includes a minimal Elmer heat-conduction smoke case at
-`examples/elmer_steady_heat/case.sif`.
+The repository includes validated smoke examples for:
+
+- `examples/openfoam_cavity_smoke`
+- `examples/su2_inviscid_bump/inv_channel_smoke.cfg`
+- `examples/code_aster_minimal_smoke/case.comm`
+- `examples/elmer_steady_heat/case.sif`
 
 ---
 

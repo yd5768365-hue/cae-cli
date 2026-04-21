@@ -72,6 +72,8 @@ def test_docker_image_catalog_resolves_alias() -> None:
         "-i",
         "model",
     ]
+    assert resolve_image_command("su2-runtime", "case.cfg") == ["case.cfg"]
+    assert resolve_image_reference("openfoam-lite") == "microfluidica/openfoam:11"
     assert resolve_image_reference("custom/image:tag") == "custom/image:tag"
     assert solver_config_key("code_aster") == "docker_code_aster_image"
 
@@ -318,6 +320,129 @@ def test_generic_docker_runner_copies_elmer_mesh_sidecar(workspace: Path) -> Non
     result = DockerSolverRunner(runtime=DummyRuntime()).run(
         "elmer",
         sif,
+        output_dir,
+        timeout=30,
+    )
+
+    assert result.success is True
+
+
+def test_generic_docker_runner_copies_su2_mesh_sidecar(workspace: Path) -> None:
+    case_dir = workspace / "su2_case"
+    mesh_dir = case_dir / "mesh"
+    mesh_dir.mkdir(parents=True)
+    cfg = case_dir / "case.cfg"
+    cfg.write_text(
+        "SOLVER= EULER\n"
+        "MESH_FILENAME= mesh/plate.su2\n",
+        encoding="utf-8",
+    )
+    (mesh_dir / "plate.su2").write_text("NDIME= 2\n", encoding="utf-8")
+    output_dir = workspace / "out"
+
+    class DummyRuntime:
+        def run(self, *, image, workdir, command, timeout, cpus=None, memory=None, network="none"):
+            assert image == "local/su2-runtime:8.3.0"
+            assert command == ["case.cfg"]
+            assert (workdir / "case.cfg").exists()
+            assert (workdir / "mesh" / "plate.su2").exists()
+            return ContainerRunResult(
+                stdout="ok",
+                stderr="",
+                returncode=0,
+                duration_seconds=0.2,
+                command=["docker", "run"],
+            )
+
+    result = DockerSolverRunner(runtime=DummyRuntime()).run(
+        "su2-runtime",
+        cfg,
+        output_dir,
+        timeout=30,
+    )
+
+    assert result.success is True
+
+
+def test_generic_docker_runner_copies_additional_su2_sidecar_inputs(workspace: Path) -> None:
+    case_dir = workspace / "su2_struct_case"
+    case_dir.mkdir(parents=True)
+    cfg = case_dir / "case.cfg"
+    cfg.write_text(
+        "SOLVER= ELASTICITY\n"
+        "MESH_FILENAME= mesh.su2\n"
+        "FEA_FILENAME= material.dat\n"
+        "RESTART_FILENAME= direct.dat\n",
+        encoding="utf-8",
+    )
+    (case_dir / "mesh.su2").write_text("NDIME= 2\n", encoding="utf-8")
+    (case_dir / "material.dat").write_text("1 1.0\n", encoding="utf-8")
+    output_dir = workspace / "out"
+
+    class DummyRuntime:
+        def run(self, *, image, workdir, command, timeout, cpus=None, memory=None, network="none"):
+            assert command == ["case.cfg"]
+            assert (workdir / "mesh.su2").exists()
+            assert (workdir / "material.dat").exists()
+            assert not (workdir / "direct.dat").exists()
+            return ContainerRunResult(
+                stdout="ok",
+                stderr="",
+                returncode=0,
+                duration_seconds=0.2,
+                command=["docker", "run"],
+            )
+
+    result = DockerSolverRunner(runtime=DummyRuntime()).run(
+        "su2-runtime",
+        cfg,
+        output_dir,
+        timeout=30,
+    )
+
+    assert result.success is True
+
+
+def test_generic_docker_runner_copies_code_aster_export_sidecars(workspace: Path) -> None:
+    case_dir = workspace / "code_aster_case"
+    case_dir.mkdir(parents=True)
+    export_file = case_dir / "case.export"
+    export_file.write_text(
+        "P actions make_etude\n"
+        "F comm case.comm D 1\n"
+        "F mmed mesh.med D 20\n"
+        "F rmed result.rmed R 80\n",
+        encoding="utf-8",
+    )
+    (case_dir / "case.comm").write_text("DEBUT();\nFIN();\n", encoding="utf-8")
+    (case_dir / "mesh.med").write_text("MED", encoding="utf-8")
+    output_dir = workspace / "out"
+
+    class DummyRuntime:
+        def run(self, *, image, workdir, command, timeout, cpus=None, memory=None, network="none"):
+            assert image == "simvia/code_aster:stable"
+            assert command == [
+                "bash",
+                "-lc",
+                'source /opt/activate.sh && run_aster "$1"',
+                "bash",
+                "case.export",
+            ]
+            assert (workdir / "case.export").exists()
+            assert (workdir / "case.comm").exists()
+            assert (workdir / "mesh.med").exists()
+            assert not (workdir / "result.rmed").exists()
+            return ContainerRunResult(
+                stdout="ok",
+                stderr="",
+                returncode=0,
+                duration_seconds=0.2,
+                command=["docker", "run"],
+            )
+
+    result = DockerSolverRunner(runtime=DummyRuntime()).run(
+        "code-aster",
+        export_file,
         output_dir,
         timeout=30,
     )
