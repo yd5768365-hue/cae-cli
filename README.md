@@ -391,13 +391,78 @@ cae-cli/
 
 ## Development
 
+Recommended clone command:
+
 ```bash
-git clone https://github.com/yd5768365-hue/cae-cli
+git clone --recurse-submodules https://github.com/yd5768365-hue/cae-cli.git
 cd cae-cli
-pip install -e ".[dev,ai,mesh,report,mcp]"
-python -m pytest
-python -m ruff check cae/ tests/
 ```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+Windows PowerShell setup:
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+
+# Minimal developer install: enough for CLI, diagnosis, lint, and tests.
+python -m pip install -e ".[dev]"
+
+# Optional full developer install.
+python -m pip install -e ".[dev,ai,mesh,report,mcp]"
+```
+
+If PowerShell blocks virtualenv activation for the current terminal:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+macOS / Linux setup:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+
+# Optional full developer install.
+python -m pip install -e ".[dev,ai,mesh,report,mcp]"
+```
+
+Verify the local checkout:
+
+```bash
+python -m ruff check cae tests
+python -m pytest tests/test_diagnose_json_cli.py tests/test_mcp_server.py tests/test_solver_output_bridge.py -q
+```
+
+Run the CLI from source:
+
+```bash
+cae --help
+cae diagnose tests/fixtures/diagnosis_cases/convergence/not_converged
+cae diagnose tests/fixtures/diagnosis_cases/convergence/not_converged --json
+```
+
+Optional Docker/WSL checks:
+
+```bash
+cae docker status
+cae docker catalog
+cae docker recommend "CFD smoke test"
+```
+
+On Windows with Docker installed inside WSL, keep Docker running in the WSL
+distribution first, then use `cae docker status` from PowerShell to confirm that
+`cae-cli` can see it.
 
 ---
 

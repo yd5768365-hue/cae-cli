@@ -432,3 +432,28 @@ python -m pytest tests/test_diagnose_json_cli.py tests/test_mcp_server.py tests/
 - 可以继续把 route explanation 做成更紧凑的 CLI 表格，或者增加
   `--route-only` / `--explain-route` 这类轻量诊断入口，专门查看 Agent
   为什么选择当前路线和默认修复计划。
+
+## [2026-04-25] developer-onboarding-clone-setup
+
+### 变更
+
+- 优化 README 的 Development 部分，把原来很短的开发命令扩展为可直接复制的
+  新开发者上手流程。
+- 新增推荐 clone 命令：
+  `git clone --recurse-submodules https://github.com/yd5768365-hue/cae-cli.git`，
+  同时补充已 clone 后初始化 submodule 的命令。
+- 分别补充 Windows PowerShell 和 macOS/Linux 的虚拟环境创建、激活、pip 升级、
+  最小开发安装和完整 extras 安装命令。
+- 增加 PowerShell 执行策略阻止 `.venv` 激活时的临时解决命令。
+- 增加本地验证命令、从源码运行 CLI 的 smoke 命令，以及 Docker/WSL 可选检查命令。
+
+### 验证
+
+```text
+README-only change; no code behavior changed.
+```
+
+### 下一步
+
+- 后续可以增加 `CONTRIBUTING.md`，把提交规范、测试范围、Docker/WSL 注意事项和
+  PR 检查流程独立出来，README 只保留最短上手路径。
