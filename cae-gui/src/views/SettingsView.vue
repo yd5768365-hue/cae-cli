@@ -1,15 +1,19 @@
 <script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ref } from 'vue'
+import { useAppStore } from '@/stores/app'
 
-const activeSection = ref('general')
+const store = useAppStore()
+const activeSection = ref<'general' | 'solver' | 'ai' | 'about'>('general')
 
 const settings = ref({
+  workspace: '',
   solverPath: '',
-  defaultSolver: 'calculix',
-  aiModel: 'deepseek-r1:1.5b',
+  defaultSolver: '',
+  aiModel: '',
   language: 'zh-CN',
-  autoCheckUpdates: true,
+  evidenceGuard: false,
+  dockerBackend: '',
 })
 
 const sections = [
@@ -17,139 +21,198 @@ const sections = [
   { key: 'solver', label: '求解器', icon: 'carbon:machine-learning-model' },
   { key: 'ai', label: 'AI', icon: 'carbon:watson-health-ai-status' },
   { key: 'about', label: '关于', icon: 'carbon:information' },
-]
+] as const
+
+const modelOptions = computed(() => store.snapshot?.models.available ?? [])
+
+function syncSettings() {
+  const snapshot = store.snapshot
+  if (!snapshot) return
+  settings.value.workspace = snapshot.config.workspace ?? snapshot.project_root
+  settings.value.solverPath = snapshot.config.solver_path ?? ''
+  settings.value.defaultSolver = snapshot.config.default_solver
+  settings.value.aiModel = snapshot.models.available.find((model) => model.active)?.value ?? snapshot.config.active_model ?? ''
+  settings.value.evidenceGuard = snapshot.config.evidence_guard
+  settings.value.dockerBackend = snapshot.docker.backend ?? '未连接'
+}
+
+async function changeAiModel() {
+  if (!settings.value.aiModel) return
+  await store.setActiveModel(settings.value.aiModel)
+  syncSettings()
+}
+
+onMounted(async () => {
+  if (!store.snapshot) {
+    await store.loadSnapshot()
+  }
+  syncSettings()
+})
+
+watch(() => store.snapshot, syncSettings)
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-4">
-    <div class="flex items-center justify-between">
-      <div class="text-[12px]" style="color: var(--md-on-surface-variant)">{{ sections.find(s => s.key === activeSection)?.label }}</div>
-    </div>
+  <div class="page-grid settings-grid">
+    <aside class="panel page-panel settings-nav">
+      <button
+        v-for="section in sections"
+        :key="section.key"
+        :class="{ active: activeSection === section.key }"
+        @click="activeSection = section.key"
+      >
+        <Icon :icon="section.icon" />
+        <span>{{ section.label }}</span>
+      </button>
+    </aside>
 
-    <div class="flex-1 grid grid-cols-5 gap-4 min-h-0">
-      <div class="col-span-1 md-card p-2 flex flex-col gap-0.5">
-        <button
-          v-for="section in sections"
-          :key="section.key"
-          class="w-full flex items-center gap-3 px-4 py-3 rounded-[14px] text-[14px] font-medium transition-all"
-          :style="activeSection === section.key
-            ? 'background: var(--md-secondary-container); color: var(--md-on-primary-container)'
-            : 'color: var(--md-on-surface-variant)'"
-          @click="activeSection = section.key"
-        >
-          <Icon :icon="section.icon" class="text-lg" />
-          {{ section.label }}
-        </button>
-      </div>
-
-      <div class="col-span-4 md-card p-5 flex flex-col">
-        <div v-if="activeSection === 'general'" class="flex-1 flex flex-col gap-4">
-          <div class="text-[16px] font-semibold" style="color: var(--md-on-surface)">通用设置</div>
-          <div class="space-y-2">
-            <div class="flex items-center justify-between p-4 rounded-[12px]" style="background: var(--md-surface-container-high)">
-              <div>
-                <div class="text-[14px] font-medium" style="color: var(--md-on-surface)">界面语言</div>
-                <div class="text-[12px] mt-0.5" style="color: var(--md-on-surface-variant)">选择显示语言</div>
-              </div>
-              <select v-model="settings.language"
-                class="rounded-[12px] px-4 py-2 text-[13px] outline-none cursor-pointer"
-                style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)">
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-              </select>
-            </div>
-            <div class="flex items-center justify-between p-4 rounded-[12px]" style="background: var(--md-surface-container-high)">
-              <div>
-                <div class="text-[14px] font-medium" style="color: var(--md-on-surface)">自动检查更新</div>
-                <div class="text-[12px] mt-0.5" style="color: var(--md-on-surface-variant)">启动时自动检查新版本</div>
-              </div>
-              <div
-                :class="settings.autoCheckUpdates ? 'md-switch-active' : 'md-switch'"
-                @click="settings.autoCheckUpdates = !settings.autoCheckUpdates"
-              >
-                <div class="md-switch-thumb" />
-              </div>
-            </div>
+    <article class="panel page-panel settings-content">
+      <template v-if="activeSection === 'general'">
+        <div class="panel-head">
+          <div class="panel-title">
+            <Icon icon="carbon:settings-adjust" />
+            <span>通用设置</span>
           </div>
         </div>
 
-        <div v-if="activeSection === 'solver'" class="flex-1 flex flex-col gap-4">
-          <div class="text-[16px] font-semibold" style="color: var(--md-on-surface)">求解器配置</div>
-          <div class="space-y-2">
-            <div class="p-4 rounded-[12px]" style="background: var(--md-surface-container-high)">
-              <div class="text-[12px] mb-2 font-medium" style="color: var(--md-on-surface-variant)">求解器路径</div>
-              <div class="flex gap-2">
-                <input v-model="settings.solverPath" type="text" placeholder="自动检测"
-                  class="flex-1 rounded-[12px] px-4 py-2.5 text-[13px] outline-none"
-                  style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)"
-                />
-                <button class="md-btn-outlined" style="padding: 8px 12px; border-radius: 12px">
-                  <Icon icon="carbon:folder-open" class="text-base" />
-                </button>
-              </div>
-            </div>
-            <div class="flex items-center justify-between p-4 rounded-[12px]" style="background: var(--md-surface-container-high)">
-              <div class="text-[14px] font-medium" style="color: var(--md-on-surface)">默认求解器</div>
-              <select v-model="settings.defaultSolver"
-                class="rounded-[12px] px-4 py-2 text-[13px] outline-none cursor-pointer"
-                style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)">
-                <option value="calculix">CalculiX</option>
-                <option value="docker-calculix">Docker CalculiX</option>
-              </select>
-            </div>
-            <div class="flex items-center gap-3 p-4 rounded-[12px]" style="background: rgba(168,218,181,0.08)">
-              <Icon icon="carbon:checkmark-filled" class="text-xl" style="color: var(--md-success)" />
-              <div>
-                <div class="text-[13px] font-medium" style="color: var(--md-success)">CalculiX 已安装</div>
-                <div class="text-[11px] mt-0.5" style="color: var(--md-on-surface-variant)">ccx 2.21</div>
-              </div>
-            </div>
+        <div class="setting-list">
+          <label class="setting-row">
+            <span>
+              <strong>工作目录</strong>
+              <small>缓存、求解临时文件与下载内容的位置</small>
+            </span>
+            <input v-model="settings.workspace" type="text" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>界面语言</strong>
+              <small>默认跟随 cae-cli 中文输出风格</small>
+            </span>
+            <select v-model="settings.language">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <div class="notice-row">
+            <Icon icon="carbon:data-vis-4" />
+            <span>
+              <strong>真实快照时间</strong>
+              <small>{{ store.snapshot?.generated_at ?? '尚未读取' }}</small>
+            </span>
+          </div>
+        </div>
+      </template>
+
+      <template v-if="activeSection === 'solver'">
+        <div class="panel-head">
+          <div class="panel-title">
+            <Icon icon="carbon:machine-learning-model" />
+            <span>求解器设置</span>
           </div>
         </div>
 
-        <div v-if="activeSection === 'ai'" class="flex-1 flex flex-col gap-4">
-          <div class="text-[16px] font-semibold" style="color: var(--md-on-surface)">AI 模型</div>
-          <div class="space-y-2">
-            <div class="flex items-center justify-between p-4 rounded-[12px]" style="background: var(--md-surface-container-high)">
-              <div class="text-[14px] font-medium" style="color: var(--md-on-surface)">活跃模型</div>
-              <select v-model="settings.aiModel"
-                class="rounded-[12px] px-4 py-2 text-[13px] outline-none cursor-pointer"
-                style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)">
-                <option value="deepseek-r1:1.5b">deepseek-r1:1.5b</option>
-              </select>
-            </div>
-            <div class="flex items-start gap-3 p-4 rounded-[12px]" style="background: rgba(232,196,124,0.08)">
-              <Icon icon="carbon:warning-filled" class="text-xl mt-0.5" style="color: var(--md-warning)" />
-              <div>
-                <div class="text-[13px] font-medium" style="color: var(--md-warning)">AI 功能未安装</div>
-                <div class="text-[11px] mt-0.5 font-mono" style="color: var(--md-on-surface-variant)">pip install "cae-cxx[ai]"</div>
-              </div>
-            </div>
+        <div class="setting-list">
+          <label class="setting-row">
+            <span>
+              <strong>默认求解器</strong>
+              <small>优先使用容器求解，避免安装源失败</small>
+            </span>
+            <select v-model="settings.defaultSolver">
+              <option :value="settings.defaultSolver">{{ settings.defaultSolver || '未配置' }}</option>
+            </select>
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>本地 ccx 路径</strong>
+              <small>留空时只使用 Docker 工作流</small>
+            </span>
+            <input v-model="settings.solverPath" type="text" placeholder="自动检测 PATH" />
+          </label>
+          <label class="setting-row">
+            <span>
+              <strong>Docker 后端</strong>
+              <small>Windows 推荐 WSL2 独立 Docker</small>
+            </span>
+            <select v-model="settings.dockerBackend">
+              <option :value="settings.dockerBackend">{{ settings.dockerBackend || '未连接' }}</option>
+            </select>
+          </label>
+        </div>
+      </template>
+
+      <template v-if="activeSection === 'ai'">
+        <div class="panel-head">
+          <div class="panel-title">
+            <Icon icon="carbon:watson-health-ai-status" />
+            <span>AI 诊断</span>
           </div>
         </div>
 
-        <div v-if="activeSection === 'about'" class="flex-1 flex flex-col gap-4">
-          <div class="text-[16px] font-semibold" style="color: var(--md-on-surface)">关于</div>
-          <div class="flex items-center gap-4 p-5 rounded-[16px]" style="background: var(--md-primary-container)">
-            <div class="w-[56px] h-[56px] rounded-[16px] flex items-center justify-center" style="background: var(--md-primary)">
-              <Icon icon="carbon:machine-learning-model" class="text-2xl" style="color: var(--md-on-primary)" />
-            </div>
-            <div>
-              <div class="text-[18px] font-bold" style="color: var(--md-on-primary-container)">CAE 工具箱</div>
-              <div class="text-[12px] mt-0.5" style="color: var(--md-on-primary-container); opacity: 0.7">v1.5.0 · MIT License</div>
-              <div class="text-[11px] mt-1" style="color: var(--md-on-primary-container); opacity: 0.5">基于 cae-cxx 构建</div>
-            </div>
-          </div>
-          <div class="grid grid-cols-4 gap-3">
-            <div v-for="tech in [{ icon: 'carbon:logo-python', label: '后端', value: 'Python', color: 'var(--md-primary)' }, { icon: 'carbon:logo-vue', label: '前端', value: 'Vue3', color: 'var(--md-success)' }, { icon: 'carbon:chip', label: '框架', value: 'Tauri', color: 'var(--md-warning)' }, { icon: 'carbon:model', label: '求解器', value: 'CalculiX', color: 'var(--md-tertiary)' }]"
-              :key="tech.label" class="p-4 rounded-[12px] text-center" style="background: var(--md-surface-container-high)">
-              <Icon :icon="tech.icon" class="text-xl mx-auto mb-1.5" :style="`color: ${tech.color}`" />
-              <div class="text-[11px]" style="color: var(--md-on-surface-variant)">{{ tech.label }}</div>
-              <div class="text-[13px] font-medium mt-0.5" style="color: var(--md-on-surface)">{{ tech.value }}</div>
-            </div>
+        <div class="setting-list">
+          <label class="setting-row">
+            <span>
+              <strong>诊断模型</strong>
+              <small>规则和参考案例优先，LLM 只做补充分析</small>
+            </span>
+            <select v-model="settings.aiModel" @change="changeAiModel">
+              <option v-if="!modelOptions.length" value="">未发现本地模型</option>
+              <option v-for="model in modelOptions" :key="`${model.source}-${model.value}`" :value="model.value">
+                {{ model.name }}
+              </option>
+            </select>
+          </label>
+          <button class="setting-row toggle-line" @click="settings.evidenceGuard = !settings.evidenceGuard">
+            <Icon icon="carbon:security" />
+            <span>
+              <strong>证据护栏</strong>
+              <small>要求诊断结论引用输入或日志证据</small>
+            </span>
+            <i class="switch mini" :class="{ on: settings.evidenceGuard }"><span /></i>
+          </button>
+          <div class="notice-row">
+            <Icon icon="carbon:warning-filled" />
+            <span>
+              <strong>AI 扩展未连接</strong>
+              <small>{{ settings.aiModel ? '当前模型来自 cae-cli 配置。' : '当前仅启用规则与参考案例诊断。' }}</small>
+            </span>
           </div>
         </div>
-      </div>
-    </div>
+      </template>
+
+      <template v-if="activeSection === 'about'">
+        <div class="about-card">
+          <div class="brand-mark static">
+            <Icon icon="carbon:assembly-cluster" />
+          </div>
+          <span>
+            <strong>cae-cli</strong>
+            <small>Python CLI · Vue 3 GUI · Tauri 桌面壳</small>
+          </span>
+        </div>
+
+        <div class="tech-grid">
+          <div>
+            <Icon icon="carbon:logo-python" />
+            <span>后端</span>
+            <strong>Python</strong>
+          </div>
+          <div>
+            <Icon icon="carbon:logo-vue" />
+            <span>前端</span>
+            <strong>Vue 3</strong>
+          </div>
+          <div>
+            <Icon icon="carbon:container-software" />
+            <span>容器</span>
+            <strong>Docker</strong>
+          </div>
+          <div>
+            <Icon icon="carbon:report-data" />
+            <span>诊断</span>
+            <strong>规则 + AI</strong>
+          </div>
+        </div>
+      </template>
+    </article>
   </div>
 </template>

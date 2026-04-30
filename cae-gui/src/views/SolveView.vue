@@ -1,203 +1,291 @@
 <script setup lang="ts">
-import { useAppStore } from '@/stores/app'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ref } from 'vue'
+import { useAppStore } from '@/stores/app'
+import { useCaeCli } from '@/composables/useCaeCli'
 
 const store = useAppStore()
-const selectedInput = ref('')
+const cae = useCaeCli()
+
+const selectedInput = ref('examples/simple_beam.inp')
 const outputDir = ref('')
-const solverType = ref('calculix')
+const solverType = ref<'docker' | 'native'>('docker')
 const isRunning = ref(false)
-const runLog = ref<string[]>([])
+const isSelectingFile = ref(false)
 const progress = ref(0)
+const runLog = ref<string[]>(['等待求解任务...'])
+const precheckError = ref('')
 
-const solvers = [
-  { id: 'calculix', name: 'CalculiX', desc: '结构/热力学 FEM' },
-  { id: 'docker-calculix', name: 'Docker', desc: '容器化求解' },
-]
+const solverCards = computed(() => [
+  {
+    key: 'docker',
+    name: 'Docker CalculiX',
+    desc: '调用 cae docker calculix 运行容器求解',
+    icon: 'carbon:container-software',
+    state: store.snapshot?.docker.available ? '可用' : '不可用',
+  },
+  {
+    key: 'native',
+    name: '本地 CalculiX',
+    desc: '调用 cae solve 使用本地求解器',
+    icon: 'carbon:terminal',
+    state: store.snapshot?.solvers.find((solver) => solver.name === 'calculix')?.installed ? '可用' : '未安装',
+  },
+] as const)
 
-const recentLogs = [
-  { project: '悬臂梁示例', status: 'completed', time: '10:30', duration: '2m 15s' },
-  { project: '热传导分析', status: 'failed', time: '09:15', duration: '0m 45s' },
-]
+const inputCandidates = computed(() => store.snapshot?.files.inputs.filter((file) => file.type === 'INP').slice(0, 4) ?? [])
 
-function startSolve() {
-  if (!selectedInput.value) return
+const checks = computed(() => [
+  { label: '输入文件', value: selectedInput.value || '未选择', ok: Boolean(selectedInput.value) },
+  { label: '输出目录', value: outputDir.value || store.snapshot?.project.output_dir || '自动生成', ok: true },
+  {
+    label: '求解后端',
+    value: solverType.value === 'docker' ? store.snapshot?.docker.backend ?? 'Docker' : '本地 ccx',
+    ok:
+      solverType.value === 'docker'
+        ? Boolean(store.snapshot?.docker.available)
+        : Boolean(store.snapshot?.solvers.some((solver) => solver.installed)),
+  },
+])
+
+const history = computed(() =>
+  store.solveTasks.map((task) => ({
+    name: task.projectName,
+    file: task.inputFile,
+    status: task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : '排队',
+    time: task.endTime?.slice(11, 16) ?? task.startTime?.slice(11, 16) ?? '--:--',
+  })),
+)
+
+async function startSolve() {
+  if (!selectedInput.value || isRunning.value) return
+
   isRunning.value = true
-  runLog.value = []
-  progress.value = 0
-
-  const mockLogs = [
-    '> cae solve ' + selectedInput.value,
-    'CalculiX ccx 2.21',
-    '读取输入文件...',
-    '模型: 1245 节点, 960 单元',
-    '组装刚度矩阵...  100%',
-    '求解线性方程组...',
-    '  迭代 1: 残差 = 3.24e-02',
-    '  迭代 2: 残差 = 4.51e-04',
-    '  迭代 3: 残差 = 2.18e-06',
-    '  迭代 4: 残差 = 8.77e-09',
-    '✓ 收敛! 4 次迭代',
-    '写入结果文件...',
-    '✓ 完成!',
+  progress.value = 15
+  runLog.value = [
+    solverType.value === 'docker'
+      ? `> cae docker calculix ${selectedInput.value}`
+      : `> cae solve ${selectedInput.value}`,
   ]
 
-  let i = 0
-  const interval = setInterval(() => {
-    if (i < mockLogs.length) {
-      runLog.value.push(mockLogs[i])
-      progress.value = Math.round(((i + 1) / mockLogs.length) * 100)
-      i++
-    } else {
-      isRunning.value = false
-      clearInterval(interval)
+  const result =
+    solverType.value === 'docker'
+      ? await cae.dockerCalculix(selectedInput.value, undefined, outputDir.value || undefined)
+      : await cae.solve(selectedInput.value, outputDir.value || undefined)
+
+  progress.value = result.ok ? 100 : 0
+  if (typeof result.data === 'string' && result.data.trim()) {
+    runLog.value.push(...result.data.trim().split(/\r?\n/))
+  }
+  if (!result.ok) {
+    runLog.value.push(`失败: ${result.error?.message ?? '求解命令返回错误'}`)
+  } else {
+    runLog.value.push('完成: 求解命令已返回成功')
+  }
+  isRunning.value = false
+  await store.loadSnapshot()
+}
+
+async function chooseInputFile() {
+  isSelectingFile.value = true
+  precheckError.value = ''
+  const selected = await cae.pickInpFile(store.snapshot?.project_root ?? 'E:\\cae-cli')
+  isSelectingFile.value = false
+
+  if (!selected) {
+    if (cae.error.value) {
+      precheckError.value = `文件选择失败: ${cae.error.value}`
     }
-  }, 250)
+    return
+  }
+
+  selectedInput.value = selected
+  await store.loadSnapshot(selected)
+}
+
+async function selectCandidate(path: string) {
+  selectedInput.value = path
+  await store.loadSnapshot(path)
 }
 
 function stopSolve() {
   isRunning.value = false
-  runLog.value.push('> 求解已手动中断')
+  runLog.value.push('当前版本使用同步命令执行，无法安全中断已提交的外部求解进程。')
 }
+
+async function runPrecheck() {
+  precheckError.value = ''
+  runLog.value = [`> cae inp check ${selectedInput.value} --json`]
+  const result = await cae.inpCheck(selectedInput.value, { json: true })
+  if (!result.ok && !result.data) {
+    precheckError.value = result.error?.message ?? '预检查失败'
+    runLog.value.push(`失败: ${precheckError.value}`)
+    return
+  }
+  const payload = result.data as { valid?: boolean; block_count?: number; unknown_keywords?: string[] }
+  runLog.value.push(`valid=${payload.valid} blocks=${payload.block_count ?? 0}`)
+  if (payload.unknown_keywords?.length) {
+    runLog.value.push(`unknown_keywords=${payload.unknown_keywords.join(', ')}`)
+  }
+}
+
+onMounted(() => {
+  if (!store.snapshot) {
+    store.loadSnapshot()
+    return
+  }
+  selectedInput.value = store.snapshot.active_input ?? selectedInput.value
+  outputDir.value = store.snapshot.project.output_dir
+})
+
+watch(
+  () => store.snapshot,
+  (snapshot) => {
+    if (!snapshot) return
+    selectedInput.value = snapshot.active_input ?? selectedInput.value
+    outputDir.value = snapshot.project.output_dir
+  },
+)
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-4">
-    <div class="flex items-center justify-between">
-      <div class="text-[12px]" style="color: var(--md-on-surface-variant)">运行有限元仿真</div>
-      <div class="flex items-center gap-3">
-        <div v-if="isRunning" class="flex items-center gap-1.5 text-[12px]" style="color: var(--md-warning)">
-          <span class="w-2 h-2 rounded-full animate-pulse" style="background: var(--md-warning)" />
-          运行中
+  <div class="page-grid solve-grid">
+    <article class="panel page-panel command-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:launch" />
+          <span>求解任务</span>
         </div>
+        <span class="status-pill" :class="{ live: isRunning }">{{ isRunning ? '运行中' : '待启动' }}</span>
+      </div>
+
+      <label class="field-block">
+        <span>输入文件</span>
+        <div class="input-shell">
+          <input v-model="selectedInput" type="text" placeholder="examples/simple_beam.inp" />
+          <button title="选择文件" :disabled="isSelectingFile" @click="chooseInputFile">
+            <Icon :icon="isSelectingFile ? 'carbon:progress-bar' : 'carbon:folder-open'" />
+          </button>
+        </div>
+      </label>
+
+      <label class="field-block">
+        <span>输出目录</span>
+        <div class="input-shell">
+          <input v-model="outputDir" type="text" placeholder="results/beam" />
+          <button title="选择目录"><Icon icon="carbon:folder-details" /></button>
+        </div>
+      </label>
+
+      <div class="solver-picker">
         <button
-          :disabled="!selectedInput || isRunning"
-          class="md-btn-filled"
-          :style="isRunning ? 'background: var(--md-error-container); color: var(--md-error)' : !selectedInput ? 'background: var(--md-surface-container-highest); color: var(--md-outline); cursor: not-allowed' : ''"
-          @click="isRunning ? stopSolve() : startSolve()"
+          v-for="solver in solverCards"
+          :key="solver.key"
+          class="solver-card"
+          :class="{ selected: solverType === solver.key }"
+          @click="solverType = solver.key"
         >
-          <Icon :icon="isRunning ? 'carbon:stop-filled' : 'carbon:play-filled'" class="text-base" />
-          {{ isRunning ? '中断' : '开始求解' }}
+          <Icon :icon="solver.icon" />
+          <span>
+            <strong>{{ solver.name }}</strong>
+            <small>{{ solver.desc }}</small>
+          </span>
+          <em>{{ solver.state }}</em>
         </button>
       </div>
-    </div>
 
-    <div class="flex-1 grid grid-cols-5 gap-4 min-h-0">
-      <div class="col-span-2 md-card p-4 flex flex-col gap-3">
-        <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">配置</div>
+      <div class="action-strip">
+        <button class="md-btn-filled" :disabled="!selectedInput" @click="isRunning ? stopSolve() : startSolve()">
+          <Icon :icon="isRunning ? 'carbon:stop-filled' : 'carbon:play-filled-alt'" />
+          {{ isRunning ? '中断' : '开始求解' }}
+        </button>
+        <button class="md-btn-outlined" @click="runPrecheck">
+          <Icon icon="carbon:checkmark-outline" />
+          预检查
+        </button>
+      </div>
+      <p v-if="precheckError" class="diagnosis-error">{{ precheckError }}</p>
+    </article>
 
-        <div class="space-y-3 flex-1">
-          <div>
-            <div class="text-[12px] mb-1.5 font-medium" style="color: var(--md-on-surface-variant)">输入文件</div>
-            <div class="flex gap-2">
-              <input v-model="selectedInput" type="text" placeholder="examples/beam.inp"
-                class="flex-1 rounded-[12px] px-4 py-2.5 text-[13px] outline-none transition-all"
-                style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)"
-              />
-              <button class="md-btn-outlined" style="padding: 8px 12px; border-radius: 12px">
-                <Icon icon="carbon:folder-open" class="text-base" />
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <div class="text-[12px] mb-1.5 font-medium" style="color: var(--md-on-surface-variant)">输出目录</div>
-            <input v-model="outputDir" type="text" placeholder="output/beam"
-              class="w-full rounded-[12px] px-4 py-2.5 text-[13px] outline-none transition-all"
-              style="background: var(--md-surface-container-highest); color: var(--md-on-surface); border: 1px solid var(--md-outline-variant)"
-            />
-          </div>
-
-          <div>
-            <div class="text-[12px] mb-2 font-medium" style="color: var(--md-on-surface-variant)">求解器</div>
-            <div class="space-y-2">
-              <label
-                v-for="solver in solvers"
-                :key="solver.id"
-                class="flex items-center gap-3 p-3 rounded-[12px] cursor-pointer transition-all"
-                :style="solverType === solver.id
-                  ? 'background: var(--md-secondary-container); color: var(--md-on-primary-container)'
-                  : 'background: var(--md-surface-container-highest); color: var(--md-on-surface-variant)'"
-              >
-                <input v-model="solverType" type="radio" :value="solver.id" class="hidden" />
-                <div
-                  class="w-5 h-5 rounded-full border-2 flex items-center justify-center"
-                  :style="solverType === solver.id ? 'border-color: var(--md-primary)' : 'border-color: var(--md-outline)'"
-                >
-                  <div v-if="solverType === solver.id" class="w-2.5 h-2.5 rounded-full" style="background: var(--md-primary)" />
-                </div>
-                <div>
-                  <div class="text-[13px] font-medium">{{ solver.name }}</div>
-                  <div class="text-[11px] mt-0.5" style="color: var(--md-on-surface-variant)">{{ solver.desc }}</div>
-                </div>
-              </label>
-            </div>
-          </div>
+    <article class="panel page-panel log-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:terminal" />
+          <span>运行日志</span>
         </div>
+        <span class="mono-caption">{{ store.snapshot?.assets.log_files ?? 0 }} 个日志文件</span>
       </div>
 
-      <div class="col-span-3 md-card p-4 flex flex-col">
-        <div class="flex items-center justify-between mb-3 flex-shrink-0">
-          <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">运行日志</div>
-          <div class="flex items-center gap-4 text-[12px]" style="color: var(--md-on-surface-variant)">
-            <span>迭代 <span class="font-semibold" style="color: var(--md-primary)">4</span>/10</span>
-            <span>残差 <span class="font-mono" style="color: var(--md-primary)">8.77e-09</span></span>
-          </div>
-        </div>
-
-        <div v-if="progress > 0" class="mb-3 flex-shrink-0">
-          <div class="flex justify-between text-[12px] mb-1.5">
-            <span style="color: var(--md-on-surface-variant)">{{ progress }}%</span>
-            <span :style="isRunning ? 'color: var(--md-warning)' : 'color: var(--md-success)'">{{ isRunning ? '求解中' : '完成' }}</span>
-          </div>
-          <div class="h-1 rounded-full overflow-hidden" style="background: var(--md-surface-container-highest)">
-            <div
-              class="h-full rounded-full transition-all duration-300"
-              :style="{ width: progress + '%', background: isRunning ? 'var(--md-primary)' : 'var(--md-success)' }"
-            />
-          </div>
-        </div>
-
-        <div class="flex-1 rounded-[12px] p-3 font-mono text-[12px] overflow-y-auto min-h-0" style="background: var(--md-surface-container-lowest)">
-          <div v-if="runLog.length === 0" class="h-full flex items-center justify-center" style="color: var(--md-outline)">
-            等待开始求解...
-          </div>
-          <div v-for="(line, i) in runLog" :key="i" :class="['leading-relaxed',
-            line.startsWith('>') ? '' :
-            line.includes('✓') ? '' :
-            line.includes('残差') ? '' : ''
-          ]" :style="line.startsWith('>') ? 'color: var(--md-primary)' : line.includes('✓') ? 'color: var(--md-success)' : line.includes('残差') ? 'color: var(--md-primary)' : 'color: var(--md-on-surface-variant)'">
-            {{ line }}
-          </div>
-          <span v-if="isRunning" class="inline-block w-1.5 h-3.5 animate-pulse" style="background: var(--md-primary)" />
-        </div>
+      <div class="progress-track">
+        <span :style="{ width: `${progress}%` }" />
       </div>
-    </div>
 
-    <div class="flex-shrink-0 md-card p-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">求解历史</div>
-        <span class="text-[12px]" style="color: var(--md-on-surface-variant)">{{ store.solveTasks.length }} 条记录</span>
+      <div class="terminal-window">
+        <p
+          v-for="(line, index) in runLog"
+          :key="`${line}-${index}`"
+          :class="{ command: line.startsWith('>'), success: line.startsWith('完成') || line.includes('收敛') }"
+        >
+          {{ line }}
+        </p>
+        <i v-if="isRunning" />
       </div>
-      <div class="grid grid-cols-3 gap-3">
-        <div v-for="log in recentLogs" :key="log.project" class="p-3 rounded-[12px]" style="background: var(--md-surface-container-high)">
-          <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-2">
-              <div class="w-2 h-2 rounded-full" :style="log.status === 'completed' ? 'background: var(--md-success)' : 'background: var(--md-error)'" />
-              <span class="text-[13px] font-medium" style="color: var(--md-on-surface)">{{ log.project }}</span>
-            </div>
-            <span class="text-[11px]" style="color: var(--md-on-surface-variant)">{{ log.time }}</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-[11px] px-2 py-0.5 rounded-full font-medium"
-              :style="log.status === 'completed' ? 'background: rgba(168,218,181,0.15); color: var(--md-success)' : 'background: rgba(242,184,181,0.15); color: var(--md-error)'">
-              {{ log.status === 'completed' ? '完成' : '失败' }}
+    </article>
+
+    <aside class="side-stack">
+      <article class="panel page-panel compact-panel">
+        <div class="panel-title">
+          <Icon icon="carbon:document" />
+          <span>输入候选</span>
+        </div>
+        <button
+          v-for="file in inputCandidates"
+          :key="file.path"
+          class="precision-option"
+          :class="{ selected: selectedInput === file.path }"
+          @click="selectCandidate(file.path)"
+        >
+          <span />
+          <strong>{{ file.name }}</strong>
+          <small>{{ file.size_label }} · {{ file.modified }}</small>
+        </button>
+        <div v-if="!inputCandidates.length" class="empty-state">没有发现可求解的 INP 文件。</div>
+      </article>
+
+      <article class="panel page-panel compact-panel">
+        <div class="panel-title">
+          <Icon icon="carbon:task-complete" />
+          <span>环境检查</span>
+        </div>
+        <div class="check-list">
+          <div v-for="item in checks" :key="item.label">
+            <Icon :icon="item.ok ? 'carbon:checkmark-filled' : 'carbon:warning-filled'" />
+            <span>
+              <strong>{{ item.label }}</strong>
+              <small>{{ item.value }}</small>
             </span>
-            <span class="text-[11px]" style="color: var(--md-on-surface-variant)">{{ log.duration }}</span>
           </div>
         </div>
+      </article>
+    </aside>
+
+    <article class="panel page-panel history-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:recently-viewed" />
+          <span>最近任务</span>
+        </div>
+        <span class="mono-caption">{{ history.length }} 条记录</span>
       </div>
-    </div>
+      <div class="history-grid">
+        <div v-for="item in history" :key="`${item.name}-${item.file}`" class="history-item">
+          <span :class="{ failed: item.status === '失败' }" />
+          <strong>{{ item.name }}</strong>
+          <small>{{ item.file }}</small>
+          <em>{{ item.status }} · {{ item.time }}</em>
+        </div>
+        <div v-if="!history.length" class="empty-state">尚未发现历史求解日志或结果文件。</div>
+      </div>
+    </article>
   </div>
 </template>

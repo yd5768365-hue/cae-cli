@@ -1,116 +1,151 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ref } from 'vue'
+import { useAppStore } from '@/stores/app'
+import { useCaeCli } from '@/composables/useCaeCli'
 
-const dockerAvailable = ref(true)
-const wslDocker = ref(true)
+const store = useAppStore()
+const cae = useCaeCli()
+
 const isChecking = ref(false)
+const pullingAlias = ref('')
+const pullError = ref('')
 
-const images = ref([
-  { alias: 'calculix-parallelworks', solver: 'CalculiX', status: 'pulled', size: '1.2 GB' },
-  { alias: 'code-aster', solver: 'Code_Aster', status: 'available', size: '2.8 GB' },
-  { alias: 'openfoam-lite', solver: 'OpenFOAM', status: 'available', size: '850 MB' },
-  { alias: 'elmer', solver: 'Elmer', status: 'available', size: '640 MB' },
-])
+const docker = computed(() => store.snapshot?.docker)
+const dockerAvailable = computed(() => Boolean(docker.value?.available))
+const wslDocker = computed(() => docker.value?.backend === 'wsl')
+const images = computed(() => docker.value?.catalog.filter((image) => image.runnable).slice(0, 8) ?? [])
+const solvers = computed(() => Array.from(new Set(images.value.map((image) => image.solver))))
+const pulledCount = computed(() => images.value.filter((image) => image.status === 'pulled').length)
 
-const solvers = ['CalculiX', 'Code_Aster', 'OpenFOAM', 'Elmer', 'SU2']
-
-function checkStatus() {
+async function checkStatus() {
   isChecking.value = true
-  setTimeout(() => { isChecking.value = false }, 1500)
+  await store.loadSnapshot()
+  isChecking.value = false
 }
 
-function pullImage(alias: string) {
-  const img = images.value.find((i) => i.alias === alias)
-  if (img) img.status = 'pulling'
-  setTimeout(() => { if (img) img.status = 'pulled' }, 3000)
+async function pullImage(alias: string) {
+  if (pullingAlias.value) return
+  pullingAlias.value = alias
+  pullError.value = ''
+  const result = await cae.dockerPull(alias)
+  if (!result.ok) {
+    pullError.value = result.error?.message ?? '镜像拉取失败'
+  }
+  pullingAlias.value = ''
+  await store.loadSnapshot()
 }
+
+onMounted(() => {
+  if (!store.snapshot) store.loadSnapshot()
+})
 </script>
 
 <template>
-  <div class="h-full flex flex-col gap-4">
-    <div class="flex items-center justify-between">
-      <div class="text-[12px]" style="color: var(--md-on-surface-variant)">{{ dockerAvailable ? '运行中 · WSL2' : '未连接' }}</div>
-      <button class="md-btn-outlined" @click="checkStatus">
-        <Icon :icon="isChecking ? 'carbon:progress-bar' : 'carbon:renew'" :class="isChecking ? 'animate-pulse' : ''" class="text-base" />
-        {{ isChecking ? '检查中...' : '刷新状态' }}
-      </button>
-    </div>
-
-    <div class="flex-1 grid grid-cols-5 gap-4 min-h-0">
-      <div class="col-span-2 md-card p-4 flex flex-col gap-3">
-        <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">引擎状态</div>
-
-        <div class="flex items-center justify-between p-4 rounded-[12px]"
-          :style="dockerAvailable ? 'background: rgba(168,218,181,0.08)' : 'background: rgba(242,184,181,0.08)'">
-          <div class="flex items-center gap-3">
-            <Icon :icon="dockerAvailable ? 'carbon:checkmark-filled' : 'carbon:close-filled'" class="text-2xl"
-              :style="dockerAvailable ? 'color: var(--md-success)' : 'color: var(--md-error)'" />
-            <div>
-              <div class="text-[14px] font-semibold" :style="dockerAvailable ? 'color: var(--md-success)' : 'color: var(--md-error)'">{{ dockerAvailable ? 'Docker 可用' : 'Docker 不可用' }}</div>
-              <div class="text-[12px] mt-0.5" style="color: var(--md-on-surface-variant)">{{ wslDocker ? 'WSL2 Docker 后端' : '原生 Docker' }}</div>
-            </div>
-          </div>
+  <div class="page-grid docker-grid">
+    <article class="panel page-panel docker-status-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:container-software" />
+          <span>Docker 环境</span>
         </div>
+        <span class="status-pill" :class="{ live: dockerAvailable }">{{ docker?.backend ?? '未连接' }}</span>
+      </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div class="p-3 rounded-[12px] text-center" style="background: var(--md-surface-container-high)">
-            <div class="text-[11px]" style="color: var(--md-on-surface-variant)">引擎</div>
-            <div class="text-[14px] font-semibold mt-0.5" style="color: var(--md-on-surface)">{{ wslDocker ? 'WSL2' : 'Native' }}</div>
-          </div>
-          <div class="p-3 rounded-[12px] text-center" style="background: var(--md-surface-container-high)">
-            <div class="text-[11px]" style="color: var(--md-on-surface-variant)">版本</div>
-            <div class="text-[14px] font-mono mt-0.5" style="color: var(--md-on-surface)">24.0.7</div>
-          </div>
+      <div class="docker-health" :class="{ ok: dockerAvailable }">
+        <Icon :icon="dockerAvailable ? 'carbon:checkmark-filled' : 'carbon:close-filled'" />
+        <span>
+          <strong>{{ dockerAvailable ? 'Docker 已连接' : 'Docker 未连接' }}</strong>
+          <small>{{ dockerAvailable ? (wslDocker ? 'WSL2 Docker' : 'Windows 原生 Docker') : docker?.error ?? '等待检测' }}</small>
+        </span>
+      </div>
+
+      <div class="status-matrix">
+        <div>
+          <span>引擎</span>
+          <strong>{{ wslDocker ? 'WSL2' : 'Native' }}</strong>
         </div>
+        <div>
+          <span>版本</span>
+          <strong>{{ docker?.version ?? '-' }}</strong>
+        </div>
+        <div>
+          <span>镜像</span>
+          <strong>{{ pulledCount }}/{{ images.length }}</strong>
+        </div>
+        <div>
+          <span>后端</span>
+          <strong>{{ docker?.command?.join(' ') || '-' }}</strong>
+        </div>
+      </div>
 
-        <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">快速操作</div>
-        <div class="space-y-2 flex-1">
-          <button v-for="op in [{ icon: 'carbon:catalog', label: '求解器目录' }, { icon: 'carbon:recommend', label: '推荐求解器' }, { icon: 'carbon:folder-open', label: '路径转换' }]" :key="op.label"
-            class="w-full flex items-center gap-3 p-3 rounded-[12px] text-[13px] transition-all"
-            style="background: var(--md-surface-container-high); color: var(--md-on-surface)">
-            <Icon :icon="op.icon" class="text-lg" style="color: var(--md-primary)" />
-            {{ op.label }}
+      <div class="check-list">
+        <div>
+          <Icon :icon="docker?.use_wsl_paths ? 'carbon:checkmark-filled' : 'carbon:information-filled'" />
+          <span>
+            <strong>路径模式</strong>
+            <small>{{ docker?.use_wsl_paths ? '/mnt/<drive> WSL 挂载路径' : '原生 Windows 路径' }}</small>
+          </span>
+        </div>
+        <div>
+          <Icon :icon="dockerAvailable ? 'carbon:checkmark-filled' : 'carbon:warning-filled'" />
+          <span>
+            <strong>本地镜像</strong>
+            <small>{{ docker?.local_image_count ?? 0 }} 个 Docker 镜像可见</small>
+          </span>
+        </div>
+      </div>
+    </article>
+
+    <article class="panel page-panel image-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:catalog" />
+          <span>镜像管理</span>
+        </div>
+        <button class="md-btn-outlined" @click="checkStatus">
+          <Icon :icon="isChecking ? 'carbon:progress-bar' : 'carbon:renew'" :class="{ 'animate-pulse': isChecking }" />
+          {{ isChecking ? '刷新中' : '刷新' }}
+        </button>
+      </div>
+
+      <div class="image-grid">
+        <article v-for="image in images" :key="image.alias" class="image-card">
+          <div class="image-state" :class="pullingAlias === image.alias ? 'pulling' : image.status" />
+          <span>
+            <strong>{{ image.alias }}</strong>
+            <small>{{ image.solver }} · {{ image.size ?? image.image }}</small>
+          </span>
+          <button
+            :class="image.status === 'pulled' ? 'md-chip-active' : 'md-chip'"
+            :disabled="image.status === 'pulled' || Boolean(pullingAlias)"
+            @click="pullImage(image.alias)"
+          >
+            {{ image.status === 'pulled' ? '已拉取' : pullingAlias === image.alias ? '拉取中' : '拉取' }}
           </button>
-        </div>
+        </article>
+        <div v-if="!images.length" class="empty-state">没有可用的 Docker 镜像目录。</div>
       </div>
+      <p v-if="pullError" class="diagnosis-error">{{ pullError }}</p>
 
-      <div class="col-span-3 md-card p-4 flex flex-col">
-        <div class="flex items-center justify-between mb-3 flex-shrink-0">
-          <div class="text-[14px] font-semibold" style="color: var(--md-on-surface)">镜像管理</div>
-          <span class="text-[12px]" style="color: var(--md-on-surface-variant)">{{ images.filter(i => i.status === 'pulled').length }}/{{ images.length }} 已拉取</span>
-        </div>
-        <div class="grid grid-cols-2 gap-3 flex-1 min-h-0">
-          <div v-for="img in images" :key="img.alias" class="p-3 rounded-[12px] flex items-center justify-between transition-all" style="background: var(--md-surface-container-high)">
-            <div class="flex items-center gap-3">
-              <div class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                :style="img.status === 'pulled' ? 'background: var(--md-success)' : img.status === 'pulling' ? 'background: var(--md-warning)' : 'background: var(--md-outline-variant)'" />
-              <div>
-                <div class="text-[13px] font-medium" style="color: var(--md-on-surface)">{{ img.alias }}</div>
-                <div class="text-[11px] mt-0.5" style="color: var(--md-on-surface-variant)">{{ img.solver }} · {{ img.size }}</div>
-              </div>
-            </div>
-            <button v-if="img.status !== 'pulling'"
-              :class="img.status === 'pulled' ? 'md-chip-active' : 'md-chip'"
-              style="padding: 4px 12px; font-size: 11px"
-              @click="img.status !== 'pulled' && pullImage(img.alias)">
-              {{ img.status === 'pulled' ? '已拉取' : '拉取' }}
-            </button>
-            <span v-else class="flex items-center gap-1 text-[11px]" style="color: var(--md-warning)">
-              <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background: var(--md-warning)" />拉取中
-            </span>
-          </div>
-        </div>
-
-        <div class="mt-3 pt-3" style="border-top: 1px solid var(--md-outline-variant)">
-          <div class="text-[14px] font-semibold mb-3" style="color: var(--md-on-surface)">可用求解器</div>
-          <div class="flex gap-2 flex-wrap">
-            <span v-for="solver in solvers" :key="solver" class="md-chip" style="padding: 4px 14px; font-size: 11px">
-              {{ solver }}
-            </span>
-          </div>
-        </div>
+      <div class="solver-tags">
+        <span v-for="solver in solvers" :key="solver">{{ solver }}</span>
       </div>
-    </div>
+    </article>
+
+    <article class="panel page-panel docker-command-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <Icon icon="carbon:terminal" />
+          <span>推荐命令</span>
+        </div>
+        <span class="mono-caption">一键复现当前环境</span>
+      </div>
+      <div class="command-copy">
+        <code>cae docker status --json</code>
+        <button title="复制"><Icon icon="carbon:copy" /></button>
+      </div>
+      <p>{{ dockerAvailable ? `Docker 命令: ${docker?.command?.join(' ')}` : docker?.error ?? 'Docker 当前不可用' }}</p>
+    </article>
   </div>
 </template>

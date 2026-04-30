@@ -17,11 +17,13 @@ CLI 框架：Typer + Rich
 后续周次将补充：
   cae explain / cae diagnose / cae suggest
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
+
 # 确保子进程使用 UTF-8 编码（避免 Windows GBK 编码问题）
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
@@ -55,14 +57,10 @@ def _print_diagnosis_route_summary(payload: dict[str, Any]) -> None:
         return
 
     post_route_step = (
-        routing.get("post_route_step")
-        if isinstance(routing.get("post_route_step"), dict)
-        else {}
+        routing.get("post_route_step") if isinstance(routing.get("post_route_step"), dict) else {}
     )
     action_context = (
-        routing.get("action_context")
-        if isinstance(routing.get("action_context"), dict)
-        else {}
+        routing.get("action_context") if isinstance(routing.get("action_context"), dict) else {}
     )
     solver_run_branch = (
         post_route_step.get("solver_run_branch")
@@ -114,6 +112,7 @@ def _print_diagnosis_route_summary(payload: dict[str, Any]) -> None:
             )
     console.print()
 
+
 # ------------------------------------------------------------------ #
 # mesh 命令组
 # ------------------------------------------------------------------ #
@@ -141,10 +140,12 @@ def mesh_check(
     from cae.viewer.mesh_check import render_mesh_check, generate_mesh_check_html
 
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]cae mesh check[/bold cyan] — 网格预览",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]cae mesh check[/bold cyan] — 网格预览",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     out_path = output or Path("mesh_check_report.html")
@@ -175,6 +176,7 @@ def mesh_check(
     # 自动打开浏览器
     if browser:
         import webbrowser
+
         webbrowser.open(f"file://{out_path.resolve()}")
         console.print("  已在浏览器中打开\n")
 
@@ -183,7 +185,9 @@ def mesh_check(
 # inp 命令组
 # ------------------------------------------------------------------ #
 
-inp_app = typer.Typer(help="[bold]INP 文件解析与修改[/bold] — 解析、检查、修改 Abaqus/CalculiX .inp 文件")
+inp_app = typer.Typer(
+    help="[bold]INP 文件解析与修改[/bold] — 解析、检查、修改 Abaqus/CalculiX .inp 文件"
+)
 
 
 @inp_app.command(name="info")
@@ -194,7 +198,9 @@ def inp_info(
     from cae.inp import InpParser
 
     console.print()
-    console.print(Panel.fit("[bold cyan]cae inp info[/bold cyan] — INP 文件结构", border_style="cyan"))
+    console.print(
+        Panel.fit("[bold cyan]cae inp info[/bold cyan] — INP 文件结构", border_style="cyan")
+    )
     console.print()
 
     try:
@@ -232,35 +238,118 @@ def inp_info(
 @inp_app.command()
 def check(
     inp_file: Path = typer.Argument(..., help=".inp 文件路径"),
+    json_output: bool = typer.Option(False, "--json", help="以结构化 JSON 输出到标准输出"),
 ) -> None:
     """[bold]校验 .inp 文件（对照 kw_list.json）[/bold]"""
     from cae.inp import InpParser, load_kw_list
 
-    console.print()
-    console.print(Panel.fit("[bold cyan]cae inp check[/bold cyan] — INP 文件校验", border_style="cyan"))
-    console.print()
+    if not json_output:
+        console.print()
+        console.print(
+            Panel.fit("[bold cyan]cae inp check[/bold cyan] — INP 文件校验", border_style="cyan")
+        )
+        console.print()
 
     try:
         parser = InpParser()
         blocks = parser.parse(inp_file)
     except Exception as exc:
-        err_console.print(f"\n  解析失败: {exc}\n")
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "success": False,
+                        "valid": False,
+                        "inp_file": str(inp_file),
+                        "error": {"code": "parse_error", "message": str(exc)},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            err_console.print(f"\n  解析失败: {exc}\n")
         raise typer.Exit(1)
 
     kw_list = load_kw_list()
     unknown_kw = []
-    missing_required: list[tuple[str, str]] = []
+    missing_required: list[dict[str, Any]] = []
+    block_payloads: list[dict[str, Any]] = []
+    seen_missing: set[tuple[int, str, str]] = set()
 
-    for b in blocks:
+    for block_index, b in enumerate(blocks):
         kw_def = kw_list.get(b.keyword_name)
+        block_issues: list[dict[str, Any]] = []
         if kw_def is None:
             if b.keyword_name not in unknown_kw:
                 unknown_kw.append(b.keyword_name)
+            block_issues.append(
+                {
+                    "code": "unknown_keyword",
+                    "keyword": b.keyword_name,
+                    "message": f"未知关键词 {b.keyword_name}",
+                }
+            )
         else:
             # 检查必填参数
             for arg in kw_def.get("arguments", []):
-                if arg.get("required") and not b.get_param(arg["name"]):
-                    missing_required.append((b.keyword_name, arg["name"]))
+                arg_name = str(arg.get("name", "")).strip()
+                if not arg_name:
+                    continue
+                if arg.get("required") and not b.get_param(arg_name):
+                    key = (block_index, b.keyword_name, arg_name)
+                    if key in seen_missing:
+                        continue
+                    seen_missing.add(key)
+                    issue = {
+                        "code": "required_argument_missing",
+                        "keyword": b.keyword_name,
+                        "argument": arg_name,
+                        "message": f"{b.keyword_name} 缺少必填参数 {arg_name}",
+                    }
+                    missing_required.append(
+                        {
+                            "keyword": b.keyword_name,
+                            "argument": arg_name,
+                            "reason": "required_argument_missing",
+                            "line": b.line_range[0] + 1,
+                        }
+                    )
+                    block_issues.append(issue)
+
+        block_payloads.append(
+            {
+                "keyword": b.keyword_name,
+                "name": b.get_param("NAME"),
+                "line_start": b.line_range[0] + 1,
+                "line_end": b.line_range[1] + 1,
+                "data_line_count": len([line for line in b.data_lines if line.strip()]),
+                "status": "ok" if not block_issues else "needs_review",
+                "issues": block_issues,
+            }
+        )
+
+    if json_output:
+        keyword_count: dict[str, int] = {}
+        for block in blocks:
+            keyword_count[block.keyword_name] = keyword_count.get(block.keyword_name, 0) + 1
+        typer.echo(
+            json.dumps(
+                {
+                    "success": True,
+                    "valid": not unknown_kw and not missing_required,
+                    "inp_file": str(inp_file),
+                    "block_count": len(blocks),
+                    "keyword_count": keyword_count,
+                    "unknown_keywords": unknown_kw,
+                    "missing_required": missing_required,
+                    "blocks": block_payloads,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
 
     if unknown_kw:
         console.print(f"  [yellow]未知关键词 ({len(unknown_kw)}):[/yellow]")
@@ -273,7 +362,9 @@ def check(
     if missing_required:
         console.print(f"  [yellow]缺少必填参数 ({len(missing_required)}):[/yellow]")
         seen = set()
-        for kw, arg in missing_required[:10]:
+        for item in missing_required[:10]:
+            kw = item["keyword"]
+            arg = item["argument"]
             key = f"{kw}:{arg}"
             if key not in seen:
                 console.print(f"    {kw} → {arg} (必填)")
@@ -311,7 +402,7 @@ def show(
 
     console.print(f"  找到 {len(blocks)} 个匹配的块：\n")
     for i, b in enumerate(blocks):
-        console.print(f"  [cyan]--- Block {i+1}: {b.keyword_name} ---[/cyan]")
+        console.print(f"  [cyan]--- Block {i + 1}: {b.keyword_name} ---[/cyan]")
         if b.lead_line:
             console.print(f"    {b.lead_line}")
         if b.data_lines:
@@ -382,16 +473,20 @@ def suggest(
     from cae.ai.llm_client import LLMClient
 
     console.print()
-    console.print(Panel.fit("[bold cyan]cae inp suggest[/bold cyan] — INP 修改建议", border_style="cyan"))
+    console.print(
+        Panel.fit("[bold cyan]cae inp suggest[/bold cyan] — INP 修改建议", border_style="cyan")
+    )
     console.print()
 
     # 收集诊断问题（如果提供了 results_dir）
     diagnose_issues = None
     if results_dir is not None:
         from cae.viewer._utils import find_frd
+
         frd_file = find_frd(results_dir)
         if frd_file is not None:
             from cae.viewer.frd_parser import parse_frd
+
             try:
                 frd_data = parse_frd(frd_file)
                 # 取最大位移和最大应力作为诊断依据
@@ -424,9 +519,15 @@ def suggest(
     if result.suggestions:
         console.print(f"  [bold]共 {len(result.suggestions)} 条建议：[/bold]\n")
         for i, s in enumerate(result.suggestions, 1):
-            icon = {"high": "[red]![/red]", "medium": "[yellow]~[/yellow]", "low": "[green]-[/green]"}.get(s.severity, "-")
-            console.print(f"  {i}. {icon} [{s.category}] {s.action.upper()} {s.target_keyword}"
-                          + (f" NAME={s.target_name}" if s.target_name else ""))
+            icon = {
+                "high": "[red]![/red]",
+                "medium": "[yellow]~[/yellow]",
+                "low": "[green]-[/green]",
+            }.get(s.severity, "-")
+            console.print(
+                f"  {i}. {icon} [{s.category}] {s.action.upper()} {s.target_keyword}"
+                + (f" NAME={s.target_name}" if s.target_name else "")
+            )
             console.print(f"     原因: {s.reason}")
             if s.params:
                 console.print(f"     参数: {s.params}")
@@ -439,6 +540,7 @@ def suggest(
 # cae inp list — 浏览关键词分类
 # ------------------------------------------------------------------ #
 
+
 @inp_app.command("list")
 def list_keywords_cmd(
     category: Optional[str] = typer.Argument(
@@ -447,7 +549,9 @@ def list_keywords_cmd(
         show_default=False,
     ),
     keyword: Optional[str] = typer.Option(
-        None, "--keyword", "-k",
+        None,
+        "--keyword",
+        "-k",
         help="关键词名称（如 *NODE）",
         show_default=False,
     ),
@@ -488,7 +592,11 @@ def list_keywords_cmd(
             return
 
         console.print()
-        console.print(Panel.fit(f"[bold cyan]{category}[/bold cyan] — {len(kws)} 个关键词", border_style="cyan"))
+        console.print(
+            Panel.fit(
+                f"[bold cyan]{category}[/bold cyan] — {len(kws)} 个关键词", border_style="cyan"
+            )
+        )
         for kw in sorted(kws):
             console.print(f"  {kw}")
         console.print()
@@ -512,11 +620,13 @@ def list_keywords_cmd(
 
 def _get_inp_tree():
     from cae.inp import load_kw_tree
+
     return load_kw_tree()
 
 
 def _get_inp_categories():
     from cae.inp import load_kw_tree
+
     tree = load_kw_tree()
     return list(tree.get("Collections", {}).keys())
 
@@ -524,6 +634,7 @@ def _get_inp_categories():
 # ------------------------------------------------------------------ #
 # cae inp template — 生成 INP 模板
 # ------------------------------------------------------------------ #
+
 
 @inp_app.command()
 def template(
@@ -538,7 +649,9 @@ def template(
     Ly: Optional[float] = typer.Option(None, "--Ly", help="板宽 (mm)"),
     pressure: Optional[float] = typer.Option(None, "--pressure", help="均匀压力 (MPa)"),
     load_value: Optional[float] = typer.Option(None, "--load", help="载荷值"),
-    load_type: Optional[str] = typer.Option(None, "--load-type", help="载荷类型 (force/moment/pressure)"),
+    load_type: Optional[str] = typer.Option(
+        None, "--load-type", help="载荷类型 (force/moment/pressure)"
+    ),
     n_nodes: Optional[int] = typer.Option(None, "--nodes", help="节点数"),
     n_elements: Optional[int] = typer.Option(None, "--elements", help="单元数"),
     n_x: Optional[int] = typer.Option(None, "--n-x", help="X方向节点数"),
@@ -667,12 +780,14 @@ def model_callback():
 def _run_ollama(args: list[str]) -> tuple[int, str, str]:
     """运行 ollama 命令并返回 (返回码, stdout, stderr)"""
     import subprocess
+
     try:
         result = subprocess.run(
             ["ollama"] + args,
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
         )
         return result.returncode, result.stdout, result.stderr
     except FileNotFoundError:
@@ -711,7 +826,9 @@ def model_list() -> None:
                     name = parts[0]
                     size = parts[1]
                     modified = " ".join(parts[2:])
-                    console.print(f"  [green]{name:<40}[/green] [dim]{size:>10}[/dim]  [dim]{modified}[/dim]")
+                    console.print(
+                        f"  [green]{name:<40}[/green] [dim]{size:>10}[/dim]  [dim]{modified}[/dim]"
+                    )
                 else:
                     console.print(f"  {line}")
     else:
@@ -910,7 +1027,9 @@ def docker_path(
 @docker_app.command(name="catalog")
 def docker_catalog(
     solver: Optional[str] = typer.Option(None, "--solver", help="Filter by solver family."),
-    capability: Optional[str] = typer.Option(None, "--capability", help="Filter by capability tag."),
+    capability: Optional[str] = typer.Option(
+        None, "--capability", help="Filter by capability tag."
+    ),
     include_experimental: bool = typer.Option(
         True,
         "--experimental/--no-experimental",
@@ -1021,7 +1140,9 @@ def docker_pull(
             timeout=timeout,
             use_default_config=use_docker_config,
         )
-    image_present = skipped_pull or (result.returncode == 0 if result else False) or runtime.image_exists(image)
+    image_present = (
+        skipped_pull or (result.returncode == 0 if result else False) or runtime.image_exists(image)
+    )
     payload = {
         "requested": image_ref,
         "image": image,
@@ -1062,7 +1183,9 @@ def docker_pull(
         elif not result and set_default:
             console.print(f"  [green][OK][/green] Saved default image: {image}")
         elif result and image_present:
-            console.print("  [yellow][!][/yellow] Pull failed, but the image already exists locally")
+            console.print(
+                "  [yellow][!][/yellow] Pull failed, but the image already exists locally"
+            )
             if set_default:
                 console.print(f"  [green][OK][/green] Saved default image: {image}")
         else:
@@ -1075,7 +1198,9 @@ def docker_pull(
 
 @docker_app.command(name="recommend")
 def docker_recommend(
-    query: str = typer.Argument(..., help="Problem description, e.g. 'steady CFD' or 'nonlinear structure'."),
+    query: str = typer.Argument(
+        ..., help="Problem description, e.g. 'steady CFD' or 'nonlinear structure'."
+    ),
     limit: int = typer.Option(5, "--limit", help="Maximum number of candidates to return."),
     json_output: bool = typer.Option(False, "--json", help="Output recommendations as JSON."),
 ) -> None:
@@ -1086,7 +1211,9 @@ def docker_recommend(
 
     items = [asdict(spec) for spec in recommend_image_specs(query, limit=limit)]
     if json_output:
-        typer.echo(json.dumps({"query": query, "recommendations": items}, ensure_ascii=False, indent=2))
+        typer.echo(
+            json.dumps({"query": query, "recommendations": items}, ensure_ascii=False, indent=2)
+        )
         return
 
     console.print()
@@ -1148,7 +1275,9 @@ def docker_build_su2_runtime(
     """Build a local SU2 runtime image that exposes SU2_CFD."""
     from cae.runtimes import DockerRuntime
 
-    dockerfile = Path(__file__).resolve().parent / "docker" / "assets" / "su2-runtime-conda.Dockerfile"
+    dockerfile = (
+        Path(__file__).resolve().parent / "docker" / "assets" / "su2-runtime-conda.Dockerfile"
+    )
     result = DockerRuntime().build_image(
         context_dir=dockerfile.parent,
         dockerfile=dockerfile,
@@ -1180,7 +1309,9 @@ def docker_build_su2_runtime(
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         console.print()
-        console.print(Panel.fit("[bold cyan]cae docker build-su2-runtime[/bold cyan]", border_style="cyan"))
+        console.print(
+            Panel.fit("[bold cyan]cae docker build-su2-runtime[/bold cyan]", border_style="cyan")
+        )
         console.print(f"  tag:     [cyan]{tag}[/cyan]")
         console.print(f"  version: [cyan]{su2_version}[/cyan]")
         if result.stdout.strip():
@@ -1192,7 +1323,9 @@ def docker_build_su2_runtime(
             if set_default:
                 console.print(f"  [green][OK][/green] Saved docker_su2_image: {tag}")
         else:
-            console.print(f"  [red][X][/red] SU2 runtime image build failed with code {result.returncode}")
+            console.print(
+                f"  [red][X][/red] SU2 runtime image build failed with code {result.returncode}"
+            )
         console.print()
 
     if not success:
@@ -1229,7 +1362,11 @@ def docker_run_solver(
         err_console.print(f"\n  input path not found: {input_path}\n")
         raise typer.Exit(1)
 
-    output_dir = output or Path("results") / f"docker-{input_path.stem if input_path.is_file() else input_path.name}"
+    output_dir = (
+        output
+        or Path("results")
+        / f"docker-{input_path.stem if input_path.is_file() else input_path.name}"
+    )
     resolved_image = resolve_image_reference(image_ref)
 
     console.print()
@@ -1321,13 +1458,16 @@ app.add_typer(docker_app, name="docker")
 # cae config
 # ------------------------------------------------------------------ #
 
+
 def _configure_workspace(workspace: Optional[Path]) -> None:
     """配置工作目录与派生路径。"""
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]cae config[/bold cyan] — 工作目录设置",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]cae config[/bold cyan] — 工作目录设置",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     if workspace is None:
@@ -1364,7 +1504,8 @@ def _configure_workspace(workspace: Optional[Path]) -> None:
 def config(
     workspace: Optional[Path] = typer.Option(
         None,
-        "--workspace", "-w",
+        "--workspace",
+        "-w",
         help="工作目录路径",
         show_default=False,
     ),
@@ -1377,7 +1518,8 @@ def config(
 def setting_legacy(
     workspace: Optional[Path] = typer.Option(
         None,
-        "--workspace", "-w",
+        "--workspace",
+        "-w",
         help="工作目录路径",
         show_default=False,
     ),
@@ -1390,6 +1532,7 @@ def setting_legacy(
 # cae solve
 # ------------------------------------------------------------------ #
 
+
 @app.command()
 def solve(
     inp_file: Optional[Path] = typer.Argument(
@@ -1399,13 +1542,15 @@ def solve(
     ),
     output: Optional[Path] = typer.Option(
         None,
-        "--output", "-o",
+        "--output",
+        "-o",
         help="结果输出目录（默认 results/<job_name>/）",
         show_default=False,
     ),
     solver: str = typer.Option(
         None,
-        "--solver", "-s",
+        "--solver",
+        "-s",
         help="求解器名称（默认使用配置中的 default_solver）",
         show_default=False,
     ),
@@ -1431,10 +1576,12 @@ def solve(
       cae solve  （纯交互模式）
     """
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]cae solve[/bold cyan] — FEA 仿真求解",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]cae solve[/bold cyan] — FEA 仿真求解",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     # ---- 交互式获取输入文件 ----
@@ -1474,7 +1621,7 @@ def solve(
         raise typer.Exit(1)
 
     # ---- 检查/设置求解器路径 ----
-    binary = solver_instance._find_binary() if hasattr(solver_instance, '_find_binary') else None
+    binary = solver_instance._find_binary() if hasattr(solver_instance, "_find_binary") else None
 
     if binary is None or solver_path is not None:
         # 如果传入了 --solver-path，或者未找到求解器，提示用户输入
@@ -1518,7 +1665,7 @@ def solve(
         settings.solver_path = str(user_provided_path.resolve())
 
         # 清除求解器缓存
-        if hasattr(solver_instance, '_find_binary'):
+        if hasattr(solver_instance, "_find_binary"):
             solver_instance._find_binary.cache_clear()
 
         # 重新查找
@@ -1526,15 +1673,13 @@ def solve(
 
     # ---- 检查安装状态 ----
     if binary is None or not solver_instance.check_installation():
-        console.print(
-            "  [bold red]未找到有效的求解器[/bold red]\n"
-            "  请检查路径是否正确。\n"
-        )
+        console.print("  [bold red]未找到有效的求解器[/bold red]\n  请检查路径是否正确。\n")
         raise typer.Exit(1)
 
     version = solver_instance.get_version()
-    console.print(f"  使用求解器: [green]{solver}[/green]"
-                  + (f"  [dim]({version})[/dim]" if version else ""))
+    console.print(
+        f"  使用求解器: [green]{solver}[/green]" + (f"  [dim]({version})[/dim]" if version else "")
+    )
     console.print(f"  输入文件:   [cyan]{inp_file}[/cyan]")
     console.print(f"  输出目录:   [cyan]{output}[/cyan]")
     console.print()
@@ -1575,7 +1720,7 @@ def solve(
             break
 
         # 清除缓存并重新输入路径
-        if hasattr(solver_instance, '_find_binary'):
+        if hasattr(solver_instance, "_find_binary"):
             solver_instance._find_binary.cache_clear()
 
         err_console.print("  [yellow]请指定 CalculiX 路径[/yellow]")
@@ -1614,13 +1759,14 @@ def solve(
         binary = solver_instance._find_binary()
         if binary:
             version = solver_instance.get_version()
-            console.print(f"  使用求解器: [green]{solver}[/green]"
-                          + (f"  [dim]({version})[/dim]" if version else ""))
+            console.print(
+                f"  使用求解器: [green]{solver}[/green]"
+                + (f"  [dim]({version})[/dim]" if version else "")
+            )
             console.print(f"  求解器路径: [cyan]{binary}[/cyan]")
             console.print(f"  输入文件:   [cyan]{inp_file}[/cyan]")
             console.print(f"  输出目录:   [cyan]{output}[/cyan]")
             console.print()
-
 
 
 def _print_solve_result(result, inp_file: Path) -> None:
@@ -1628,18 +1774,27 @@ def _print_solve_result(result, inp_file: Path) -> None:
 
     if result.success:
         has_warnings = bool(result.warnings)
-        status_title = "[bold yellow]求解完成（含警告）[/bold yellow]" if has_warnings else "[bold green]求解完成！[/bold green]"
+        status_title = (
+            "[bold yellow]求解完成（含警告）[/bold yellow]"
+            if has_warnings
+            else "[bold green]求解完成！[/bold green]"
+        )
         status_border = "yellow" if has_warnings else "green"
-        console.print(Panel(
-            f"{status_title}  耗时 {result.duration_str}",
-            border_style=status_border,
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                f"{status_title}  耗时 {result.duration_str}",
+                border_style=status_border,
+                expand=False,
+            )
+        )
         console.print()
 
         # 输出文件表格
         table = Table(
-            "文件", "大小", box=box.SIMPLE, show_header=True,
+            "文件",
+            "大小",
+            box=box.SIMPLE,
+            show_header=True,
             header_style="bold dim",
         )
         for f in result.output_files:
@@ -1650,32 +1805,28 @@ def _print_solve_result(result, inp_file: Path) -> None:
         console.print(table)
 
         if result.frd_file:
-            console.print(
-                f"  查看结果: [bold]`cae view {result.output_dir}`[/bold]"
-            )
+            console.print(f"  查看结果: [bold]`cae view {result.output_dir}`[/bold]")
         if result.warnings:
             console.print(
                 f"\n  [yellow]结果已生成，但检测到 {len(result.warnings)} 条警告[/yellow]"
                 " — 运行 [bold]`cae diagnose`[/bold] 查看详情"
             )
-        console.print(
-            "\n  输入 [bold]`cae explain`[/bold] 让 AI 解读结果\n"
-        )
+        console.print("\n  输入 [bold]`cae explain`[/bold] 让 AI 解读结果\n")
 
     else:
-        console.print(Panel(
-            f"[bold red]求解失败[/bold red]  耗时 {result.duration_str}",
-            border_style="red",
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                f"[bold red]求解失败[/bold red]  耗时 {result.duration_str}",
+                border_style="red",
+                expand=False,
+            )
+        )
         console.print()
         if result.error_message:
             console.print("  [bold]错误信息:[/bold]")
             for line in result.error_message.strip().splitlines():
                 console.print(f"  [red]{line}[/red]")
-        console.print(
-            "\n  运行 [bold]`cae diagnose`[/bold] 让 AI 诊断问题\n"
-        )
+        console.print("\n  运行 [bold]`cae diagnose`[/bold] 让 AI 诊断问题\n")
         raise typer.Exit(1)
 
 
@@ -1683,12 +1834,17 @@ def _print_solve_result(result, inp_file: Path) -> None:
 # cae solvers
 # ------------------------------------------------------------------ #
 
+
 @app.command(name="solvers")
 def list_solvers_cmd() -> None:
     """列出所有已注册求解器及其安装状态。"""
     console.print()
     table = Table(
-        "名称", "状态", "版本", "支持格式", "描述",
+        "名称",
+        "状态",
+        "版本",
+        "支持格式",
+        "描述",
         box=box.ROUNDED,
         header_style="bold cyan",
     )
@@ -1712,6 +1868,7 @@ def list_solvers_cmd() -> None:
 # ------------------------------------------------------------------ #
 # cae info
 # ------------------------------------------------------------------ #
+
 
 @app.command()
 def info() -> None:
@@ -1744,6 +1901,7 @@ def info() -> None:
 # cae run - 全流程一键运行（网格 → 求解 → 可视化）
 # ------------------------------------------------------------------ #
 
+
 @app.command(name="run", hidden=True)
 def run(
     model_file: Optional[Path] = typer.Argument(None, help="模型文件路径"),
@@ -1758,10 +1916,12 @@ def run(
       cae run bracket.step
     """
     console.print()
-    console.print(Panel.fit(
-        "[bold yellow]cae run[/bold yellow] — 全流程仿真",
-        border_style="yellow",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold yellow]cae run[/bold yellow] — 全流程仿真",
+            border_style="yellow",
+        )
+    )
     console.print()
     console.print("  [yellow]此功能暂未实现，敬请期待！[/yellow]\n")
     console.print("  目前可以分步执行：")
@@ -1778,23 +1938,31 @@ def mesh_gen(
         show_default=False,
     ),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="网格输出目录（默认 results/<name>/）",
     ),
     quality: str = typer.Option(
-        "medium", "--quality", "-q",
+        "medium",
+        "--quality",
+        "-q",
         help="网格精度 [coarse/medium/fine]",
     ),
     fmt: str = typer.Option(
-        "inp", "--format", "-f",
+        "inp",
+        "--format",
+        "-f",
         help="输出格式 [inp/msh/vtu]",
     ),
     order: int = typer.Option(
-        1, "--order",
+        1,
+        "--order",
         help="单元阶次（1=线性, 2=二次）",
     ),
     no_optimize: bool = typer.Option(
-        False, "--no-optimize",
+        False,
+        "--no-optimize",
         help="跳过网格质量优化",
     ),
 ) -> None:
@@ -1808,23 +1976,25 @@ def mesh_gen(
       cae mesh gen             （纯交互模式）
     """
     from cae.mesh.gmsh_runner import (
-        MeshQuality, mesh_geometry, check_gmsh, get_gmsh_version,
+        MeshQuality,
+        mesh_geometry,
+        check_gmsh,
+        get_gmsh_version,
         SUPPORTED_GEO_FORMATS,
     )
 
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]cae mesh gen[/bold cyan] — 网格划分（Gmsh）",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]cae mesh gen[/bold cyan] — 网格划分（Gmsh）",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     # ---- 检查 Gmsh ----
     if not check_gmsh():
-        err_console.print(
-            "\n  未找到 gmsh\n"
-            "  请运行: [bold]pip install gmsh[/bold]\n"
-        )
+        err_console.print("\n  未找到 gmsh\n  请运行: [bold]pip install gmsh[/bold]\n")
         raise typer.Exit(1)
 
     gmsh_ver = get_gmsh_version()
@@ -1887,11 +2057,13 @@ def mesh_gen(
 
     console.print()
     if result.success:
-        console.print(Panel(
-            f"[bold green]网格划分完成！[/bold green]  耗时 {result.duration_str}",
-            border_style="green",
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                f"[bold green]网格划分完成！[/bold green]  耗时 {result.duration_str}",
+                border_style="green",
+                expand=False,
+            )
+        )
         console.print()
         console.print(f"  节点数:   [bold]{result.node_count}[/bold]")
         console.print(f"  单元数:   [bold]{result.element_count}[/bold]")
@@ -1899,20 +2071,19 @@ def mesh_gen(
 
         if result.mesh_file and result.mesh_file.suffix == ".msh":
             console.print(
-                f"\n  转换为 CalculiX 格式: "
-                f"[bold]`cae convert {result.mesh_file} --to inp`[/bold]"
+                f"\n  转换为 CalculiX 格式: [bold]`cae convert {result.mesh_file} --to inp`[/bold]"
             )
         elif result.inp_file:
-            console.print(
-                f"\n  下一步求解: [bold]`cae solve {result.inp_file}`[/bold]"
-            )
+            console.print(f"\n  下一步求解: [bold]`cae solve {result.inp_file}`[/bold]")
         console.print()
     else:
-        console.print(Panel(
-            "[bold red]网格划分失败[/bold red]",
-            border_style="red",
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                "[bold red]网格划分失败[/bold red]",
+                border_style="red",
+                expand=False,
+            )
+        )
         if result.error:
             console.print(f"\n  {result.error}\n")
         raise typer.Exit(1)
@@ -1943,10 +2114,12 @@ def view(
     from cae.viewer.vtk_export import frd_to_vtu
 
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]cae view[/bold cyan] — 仿真结果可视化",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]cae view[/bold cyan] — 仿真结果可视化",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     # ---- 交互式获取目录 ----
@@ -2045,11 +2218,13 @@ def view(
                     for key, res in renders.items():
                         label, caption = _SECTION_LABELS.get(key, (key, ""))
                         if res.success and res.first():
-                            sections.append(ReportSection(
-                                title=label,
-                                image_path=res.first(),
-                                caption=caption,
-                            ))
+                            sections.append(
+                                ReportSection(
+                                    title=label,
+                                    image_path=res.first(),
+                                    caption=caption,
+                                )
+                            )
 
                     config = ReportConfig(
                         title=f"{job_name} 仿真报告",
@@ -2063,7 +2238,9 @@ def view(
                     html_generator.generate_report(config, report_path)
 
                     progress.update(task, description=f"  {vtu_file.name}", completed=True)
-                    console.print(f"    报告: {report_path.name} ({report_path.stat().st_size // 1024} KB)")
+                    console.print(
+                        f"    报告: {report_path.name} ({report_path.stat().st_size // 1024} KB)"
+                    )
                 except Exception as exc:
                     progress.update(task, description=f"  {vtu_file.name}", completed=True)
                     err_console.print(f"    报告生成失败: {exc}")
@@ -2084,14 +2261,16 @@ def view(
         err_console.print(f"\n  {exc}\n")
         raise typer.Exit(1)
 
-    console.print(Panel(
-        f"[bold green]可视化服务已启动[/bold green]\n\n"
-        f"  URL : [bold cyan]{url}[/bold cyan]\n"
-        f"  文件: {', '.join(f.name for f in files)}\n\n"
-        f"  按 Ctrl+C 停止服务",
-        border_style="green",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold green]可视化服务已启动[/bold green]\n\n"
+            f"  URL : [bold cyan]{url}[/bold cyan]\n"
+            f"  文件: {', '.join(f.name for f in files)}\n\n"
+            f"  按 Ctrl+C 停止服务",
+            border_style="green",
+            expand=False,
+        )
+    )
     console.print()
 
     try:
@@ -2111,7 +2290,8 @@ def convert(
     ),
     output: Optional[Path] = typer.Option(
         None,
-        "--output", "-o",
+        "--output",
+        "-o",
         help="输出目录（默认与 .frd 同目录）",
     ),
 ) -> None:
@@ -2164,7 +2344,9 @@ def convert(
 @app.command()
 def diagnose(
     results_dir: Optional[Path] = typer.Argument(None, help="结果目录"),
-    inp_file: Optional[Path] = typer.Option(None, "-i", "--inp", help="INP 文件（用于规则检测和参考案例匹配）"),
+    inp_file: Optional[Path] = typer.Option(
+        None, "-i", "--inp", help="INP 文件（用于规则检测和参考案例匹配）"
+    ),
     ai: bool = typer.Option(False, "--ai", help="启用 AI 深度诊断（需要 Ollama）"),
     guardrails: Optional[Path] = typer.Option(
         None,
@@ -2231,7 +2413,9 @@ def diagnose(
 
     if not json_output:
         console.print()
-        console.print(Panel.fit("[bold cyan]cae diagnose[/bold cyan] — 诊断仿真问题", border_style="cyan"))
+        console.print(
+            Panel.fit("[bold cyan]cae diagnose[/bold cyan] — 诊断仿真问题", border_style="cyan")
+        )
         console.print()
 
     if results_dir is None:
@@ -2243,7 +2427,9 @@ def diagnose(
         inp_file = results_dir
         results_dir = results_dir.parent
         if not json_output:
-            console.print(f"  检测到 INP 文件，自动使用其目录作为结果目录: [cyan]{results_dir}[/cyan]")
+            console.print(
+                f"  检测到 INP 文件，自动使用其目录作为结果目录: [cyan]{results_dir}[/cyan]"
+            )
     elif inp_file is None and not any(results_dir.glob("*.frd")):
         # 如果没有指定 INP 文件，且 results_dir 下没有 .frd 文件
         # 尝试在 results_dir 下找 INP 文件
@@ -2312,7 +2498,9 @@ def diagnose(
         summary = build_diagnosis_summary(result.issues)
         top_issue = summary["top_issue"]
         console.print(f"  [bold red]发现 {summary['total']} 个问题[/bold red]")
-        console.print(f"  严重问题: [red]{summary['error_count']}[/red]  警告: [yellow]{summary['warning_count']}[/yellow]")
+        console.print(
+            f"  严重问题: [red]{summary['error_count']}[/red]  警告: [yellow]{summary['warning_count']}[/yellow]"
+        )
         console.print(f"  风险评分: [bold]{summary.get('risk_score', 0)}/100[/bold]")
         console.print(
             "  诊断分层: "
@@ -2326,13 +2514,18 @@ def diagnose(
         if confidence_summary:
             console.print(f"  证据置信度: {confidence_summary}")
         category_summary = ", ".join(
-            f"{k}:{v}" for k, v in sorted(summary.get("by_category", {}).items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+            f"{k}:{v}"
+            for k, v in sorted(
+                summary.get("by_category", {}).items(), key=lambda kv: (-kv[1], kv[0])
+            )[:4]
         )
         if category_summary:
             console.print(f"  主要问题分布: {category_summary}")
         if top_issue is not None:
             console.print(f"  最优先问题: [bold]{top_issue.title}[/bold]")
-            console.print(f"  首步操作: {summary['first_action'] or '先按最高优先级问题检查输入与约束'}")
+            console.print(
+                f"  首步操作: {summary['first_action'] or '先按最高优先级问题检查输入与约束'}"
+            )
         for idx, action in enumerate(summary.get("action_items", []), 1):
             console.print(f"  建议动作 {idx}: {action}")
         for iss in result.issues[:15]:
@@ -2375,7 +2568,7 @@ def diagnose(
         console.print(f"  [bold]参考案例匹配[/bold]：找到 {len(result.similar_cases)} 个相似案例")
         for case in result.similar_cases[:3]:
             console.print(f"  - {case['name']} (相似度 {case['similarity_score']}%)")
-            if case.get('expected_disp_max'):
+            if case.get("expected_disp_max"):
                 console.print(f"    预期位移: {case['expected_disp_max']:.3e}")
         console.print()
 
@@ -2416,7 +2609,10 @@ def diagnose(
                         "passed": "[green]passed[/green]",
                         "failed": "[red]failed[/red]",
                         "skipped": "[yellow]skipped[/yellow]",
-                    }.get(fix_result.verification_status, f"[yellow]{fix_result.verification_status}[/yellow]")
+                    }.get(
+                        fix_result.verification_status,
+                        f"[yellow]{fix_result.verification_status}[/yellow]",
+                    )
                     console.print(f"  [dim]修复后验证状态: {status_label}[/dim]")
                     if fix_result.verification_notes:
                         console.print(f"  [dim]验证说明: {fix_result.verification_notes}[/dim]")
@@ -2437,19 +2633,34 @@ def generate_report(
         help="结果目录（含 .frd 文件）",
     ),
     output: Optional[Path] = typer.Option(
-        None, "-o", "--output", help="输出 PDF 路径（默认 results/report_YYYYMMDD_HHMMSS.pdf）",
+        None,
+        "-o",
+        "--output",
+        help="输出 PDF 路径（默认 results/report_YYYYMMDD_HHMMSS.pdf）",
     ),
     inp_file: Optional[Path] = typer.Option(
-        None, "-i", "--inp", help="INP 文件路径（读取材料属性）",
+        None,
+        "-i",
+        "--inp",
+        help="INP 文件路径（读取材料属性）",
     ),
     yield_strength: Optional[float] = typer.Option(
-        None, "-y", "--yield", help="手动指定屈服强度（MPa），覆盖 INP 值",
+        None,
+        "-y",
+        "--yield",
+        help="手动指定屈服强度（MPa），覆盖 INP 值",
     ),
     job_name: Optional[str] = typer.Option(
-        None, "-j", "--job", help="工况名称",
+        None,
+        "-j",
+        "--job",
+        help="工况名称",
     ),
     scale: float = typer.Option(
-        50.0, "-s", "--scale", help="变形放大倍数（云图）",
+        50.0,
+        "-s",
+        "--scale",
+        help="变形放大倍数（云图）",
     ),
 ) -> None:
     """
@@ -2489,6 +2700,7 @@ def generate_report(
     # 默认输出路径
     if output is None:
         from datetime import datetime
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output = results_dir / f"report_{timestamp}.pdf"
 
@@ -2519,6 +2731,7 @@ def generate_report(
             progress.update(task, description="  生成报告中...", completed=50)
 
         import os
+
         size_mb = os.path.getsize(result_path) / (1024 * 1024)
         console.print()
         console.print(f"  [green]✓ PDF 报告已生成！[/green]  {result_path}  ({size_mb:.1f} MB)")
@@ -2542,8 +2755,44 @@ def generate_report(
 
 
 # ------------------------------------------------------------------ #
+# cae gui - 桌面端真实状态快照
+# ------------------------------------------------------------------ #
+
+gui_app = typer.Typer(
+    name="gui",
+    help="[bold]桌面端数据接口[/bold] — 输出 GUI 所需的真实项目状态",
+    no_args_is_help=True,
+)
+
+
+@gui_app.command(name="snapshot")
+def gui_snapshot(
+    project_root: Path = typer.Option(Path("."), "--project-root", help="项目根目录"),
+    inp_file: Optional[Path] = typer.Option(None, "-i", "--inp", help="当前 INP 文件"),
+    json_output: bool = typer.Option(True, "--json/--no-json", help="以 JSON 输出"),
+) -> None:
+    """输出桌面端使用的项目状态快照。"""
+    from cae.gui_snapshot import build_gui_snapshot
+
+    payload = build_gui_snapshot(project_root=project_root, inp_file=inp_file)
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    console.print(Panel.fit("[bold cyan]cae gui snapshot[/bold cyan]", border_style="cyan"))
+    console.print(f"  项目根目录: [cyan]{payload['project_root']}[/cyan]")
+    console.print(f"  当前输入:   [cyan]{payload['active_input'] or '未发现'}[/cyan]")
+    console.print(f"  输入文件:   [cyan]{payload['assets']['input_files']}[/cyan]")
+    console.print(f"  结果文件:   [cyan]{payload['assets']['result_files']}[/cyan]")
+
+
+app.add_typer(gui_app, name="gui")
+
+
+# ------------------------------------------------------------------ #
 # 工具函数
 # ------------------------------------------------------------------ #
+
 
 def _fmt_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):

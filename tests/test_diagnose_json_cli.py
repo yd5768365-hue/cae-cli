@@ -27,8 +27,7 @@ def test_diagnose_json_outputs_parseable_payload() -> None:
     workspace = _make_workspace()
     try:
         (workspace / "case.stderr").write_text(
-            "solver start\n"
-            "ERROR: increment did not converge\n",
+            "solver start\nERROR: increment did not converge\n",
             encoding="utf-8",
         )
         (workspace / "case.sta").write_text(
@@ -116,8 +115,7 @@ def test_diagnose_text_output_includes_evidence_fields() -> None:
     workspace = _make_workspace()
     try:
         (workspace / "case.stderr").write_text(
-            "solver start\n"
-            "ERROR: increment did not converge\n",
+            "solver start\nERROR: increment did not converge\n",
             encoding="utf-8",
         )
         (workspace / "case.sta").write_text(
@@ -151,10 +149,7 @@ def test_diagnose_fix_flag_applies_safe_autofix_without_prompt() -> None:
     try:
         inp_file = workspace / "model.inp"
         inp_file.write_text(
-            "*HEADING\n"
-            "*MATERIAL, NAME=STEEL\n"
-            "*DENSITY\n"
-            "7.85e-09\n",
+            "*HEADING\n*MATERIAL, NAME=STEEL\n*DENSITY\n7.85e-09\n",
             encoding="utf-8",
         )
         (workspace / "case.stderr").write_text(

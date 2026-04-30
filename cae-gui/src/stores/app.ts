@@ -1,57 +1,89 @@
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { Project, SolveTask, DiagnosisResult } from '@/types'
+import { useCaeCli } from '@/composables/useCaeCli'
+import type { DiagnosisResult, GuiSnapshot, Project, SolveTask } from '@/types'
 
 export const useAppStore = defineStore('app', () => {
-  const projects = ref<Project[]>([
-    {
-      id: '1',
-      name: '悬臂梁示例',
-      path: 'examples/beam.inp',
-      status: 'done',
-      lastModified: '2026-04-26 10:30',
-    },
-    {
-      id: '2',
-      name: '热传导分析',
-      path: 'examples/heat.inp',
-      status: 'idle',
-      lastModified: '2026-04-25 16:00',
-    },
-  ])
-
-  const solveTasks = ref<SolveTask[]>([
-    {
-      id: '1',
-      projectName: '悬臂梁示例',
-      inputFile: 'examples/beam.inp',
-      outputDir: 'output/beam',
-      status: 'completed',
-      progress: 100,
-      startTime: '2026-04-26 10:30:00',
-      endTime: '2026-04-26 10:32:15',
-    },
-  ])
-
+  const cae = useCaeCli()
+  const snapshot = ref<GuiSnapshot | null>(null)
+  const snapshotLoading = ref(false)
+  const snapshotError = ref('')
+  const selectedInputPath = ref<string | null>(null)
+  const projects = ref<Project[]>([])
+  const solveTasks = ref<SolveTask[]>([])
   const diagnosisResult = ref<DiagnosisResult | null>(null)
-
-  const activeProject = ref<Project | null>(projects.value[0] ?? null)
-
+  const activeProject = ref<Project | null>(null)
   const sidebarCollapsed = ref(false)
 
-  const currentSolve = computed(() =>
-    solveTasks.value.find((t) => t.status === 'running'),
-  )
+  const currentSolve = computed(() => solveTasks.value.find((task) => task.status === 'running'))
 
   const recentProjects = computed(() =>
     [...projects.value].sort(
-      (a, b) =>
-        new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime(),
+      (a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime(),
     ),
   )
 
   function setActiveProject(project: Project) {
     activeProject.value = project
+  }
+
+  async function loadSnapshot(inpFile?: string) {
+    if (snapshotLoading.value) return
+    if (inpFile) {
+      selectedInputPath.value = inpFile
+    }
+    snapshotLoading.value = true
+    snapshotError.value = ''
+    const result = await cae.guiSnapshot('E:\\cae-cli', selectedInputPath.value ?? undefined)
+    snapshotLoading.value = false
+
+    if (!result.ok || !result.data || typeof result.data === 'string') {
+      snapshotError.value = result.error?.message ?? '无法读取 GUI 真实数据快照'
+      return
+    }
+
+    const payload = result.data as GuiSnapshot
+    snapshot.value = payload
+    selectedInputPath.value = payload.active_input ?? selectedInputPath.value
+    projects.value = payload.files.inputs
+      .filter((file) => file.type === 'INP')
+      .map((file, index) => ({
+        id: file.path,
+        name: file.stem,
+        path: file.path,
+        status:
+          file.path === payload.active_input
+            ? payload.inp.valid
+              ? 'done'
+              : 'error'
+            : 'idle',
+        lastModified: file.modified,
+      }))
+    activeProject.value =
+      projects.value.find((project) => project.path === payload.active_input)
+      ?? projects.value[0]
+      ?? null
+    solveTasks.value = payload.solve_history.map((item, index) => ({
+      id: `${item.file}-${index}`,
+      projectName: item.name,
+      inputFile: payload.active_input ?? '',
+      outputDir: payload.project.output_dir,
+      status: item.status === '有结果' ? 'completed' : 'pending',
+      progress: item.status === '有结果' ? 100 : 0,
+      endTime: item.time,
+      log: [item.file],
+    }))
+  }
+
+  async function setActiveModel(modelName: string) {
+    if (!modelName.trim()) return false
+    const result = await cae.modelSet(modelName)
+    if (!result.ok) {
+      snapshotError.value = result.error?.message ?? '无法切换 AI 模型'
+      return false
+    }
+    await loadSnapshot()
+    return true
   }
 
   function toggleSidebar() {
@@ -67,7 +99,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function updateSolveTask(id: string, updates: Partial<SolveTask>) {
-    const task = solveTasks.value.find((t) => t.id === id)
+    const task = solveTasks.value.find((item) => item.id === id)
     if (task) {
       Object.assign(task, updates)
     }
@@ -80,11 +112,17 @@ export const useAppStore = defineStore('app', () => {
   return {
     projects,
     solveTasks,
+    snapshot,
+    snapshotLoading,
+    snapshotError,
+    selectedInputPath,
     diagnosisResult,
     activeProject,
     sidebarCollapsed,
     currentSolve,
     recentProjects,
+    loadSnapshot,
+    setActiveModel,
     setActiveProject,
     toggleSidebar,
     addProject,
